@@ -62,7 +62,4 @@ pub use codex_protocol::protocol;
 // as those in the protocol crate when constructing protocol messages.
 pub use codex_protocol::config_types as protocol_config_types;
 
-// Experimental scaffolding for multi‑conversation Session design (design.md).
-// Kept unused to preserve current behavior; aids incremental adoption.
-#[allow(dead_code)]
-mod session_v2;
+

@@ -581,7 +581,8 @@ pub(crate) fn get_openai_tools(
                 Err(e) => {
                     tracing::error!(
                         "Failed to convert {:?} MCP tool to OpenAI tool: {:?}",
-                        name, e
+                        name,
+                        e
                     );
                 }
             }
