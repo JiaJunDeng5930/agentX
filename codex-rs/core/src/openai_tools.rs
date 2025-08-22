@@ -521,18 +521,16 @@ pub(crate) fn get_openai_tools(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
 ) -> Vec<OpenAiTool> {
+    // 1) Built‑ins in a fixed, deterministic order
+    //    shell/local_shell -> update_plan (optional) -> apply_patch (optional)
     let mut tools: Vec<OpenAiTool> = Vec::new();
 
     match &config.shell_type {
-        ConfigShellToolType::DefaultShell => {
-            tools.push(create_shell_tool());
-        }
+        ConfigShellToolType::DefaultShell => tools.push(create_shell_tool()),
         ConfigShellToolType::ShellWithRequest { sandbox_policy } => {
             tools.push(create_shell_tool_for_sandbox(sandbox_policy));
         }
-        ConfigShellToolType::LocalShell => {
-            tools.push(OpenAiTool::LocalShell {});
-        }
+        ConfigShellToolType::LocalShell => tools.push(OpenAiTool::LocalShell {}),
     }
 
     if config.plan_tool {
@@ -543,12 +541,48 @@ pub(crate) fn get_openai_tools(
         tools.push(create_apply_patch_tool());
     }
 
+    // Track tool names we've already added to support de‑duplication and
+    // conflict detection for MCP tools.
+    let mut seen_function_names: std::collections::HashMap<String, ResponsesApiTool> =
+        std::collections::HashMap::new();
+
+    // Seed with built‑in function tool names so MCP cannot accidentally shadow
+    // them without an explicit conflict notice.
+    for t in &tools {
+        if let OpenAiTool::Function(func) = t {
+            seen_function_names.insert(func.name.clone(), func.clone());
+        }
+    }
+
+    // 2) MCP tools in deterministic (lexicographic) order by fully‑qualified name
     if let Some(mcp_tools) = mcp_tools {
-        for (name, tool) in mcp_tools {
+        let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (name, tool) in entries {
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
-                Ok(converted_tool) => tools.push(OpenAiTool::Function(converted_tool)),
+                Ok(converted) => {
+                    // De‑duplicate by name. If a tool with the same name exists:
+                    //  - if signature matches, drop the duplicate silently
+                    //  - otherwise, log an error and skip the new definition
+                    if let Some(existing) = seen_function_names.get(&converted.name) {
+                        if existing != &converted {
+                            tracing::error!(
+                                "Conflicting tool definitions for {}: keeping first, skipping second",
+                                converted.name
+                            );
+                        }
+                        continue;
+                    }
+
+                    seen_function_names.insert(converted.name.clone(), converted.clone());
+                    tools.push(OpenAiTool::Function(converted));
+                }
                 Err(e) => {
-                    tracing::error!("Failed to convert {name:?} MCP tool to OpenAI tool: {e:?}");
+                    tracing::error!(
+                        "Failed to convert {:?} MCP tool to OpenAI tool: {:?}",
+                        name, e
+                    );
                 }
             }
         }
