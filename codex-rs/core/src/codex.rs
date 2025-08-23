@@ -603,7 +603,8 @@ impl Session {
             turn_context.approval_policy,
             turn_context.sandbox_policy.clone(),
         )));
-        sess.record_conversation_items(&conversation_items).await;
+        sess.record_conversation_items_for(&root_conversation, &conversation_items)
+            .await;
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         let events = std::iter::once(Event {
@@ -758,6 +759,8 @@ impl Session {
     }
 
     pub fn add_approved_command(&self, cmd: Vec<String>) {
+        // Default TTL for per-session approvals
+        const APPROVAL_TTL_SECS: u64 = 30 * 60; // 30 minutes
         let mut state = self.state.lock_unchecked();
         // Opportunistically purge expired approvals
         let now = Instant::now();
@@ -767,7 +770,7 @@ impl Session {
         state.approved_commands.insert(CommandKey {
             path: cmd,
             conversation: None,
-            expires_at: None,
+            expires_at: Some(now + Duration::from_secs(APPROVAL_TTL_SECS)),
         });
     }
 
@@ -787,21 +790,21 @@ impl Session {
     }
 
     /// Records items to both the rollout and the chat completions/ZDR
-    /// transcript, if enabled.
-    async fn record_conversation_items(&self, items: &[ResponseItem]) {
+    /// transcript, if enabled, for the specified conversation.
+    async fn record_conversation_items_for(
+        &self,
+        conv: &Arc<Conversation>,
+        items: &[ResponseItem],
+    ) {
         debug!("Recording items for conversation: {items:?}");
         // Respect storage policy when recording to rollout.
-        let storage_policy = self.root_conversation.storage_policy.clone();
+        let storage_policy = conv.storage_policy.clone();
         if matches!(storage_policy, StoragePolicy::Full | StoragePolicy::Ttl(_)) {
             self.record_state_snapshot(items).await;
         }
 
-        // Always record to in-memory history for prompt construction.
-        self.root_conversation
-            .state
-            .lock_unchecked()
-            .history
-            .record_items(items);
+        // Record to in-memory history for prompt construction.
+        conv.state.lock_unchecked().history.record_items(items);
     }
 
     async fn record_state_snapshot(&self, items: &[ResponseItem]) {
@@ -832,6 +835,7 @@ impl Session {
             call_id,
             command_for_display,
             cwd,
+            conversation_id,
             apply_patch,
         } = exec_command_context;
         let msg = match apply_patch {
@@ -859,7 +863,7 @@ impl Session {
         };
         let event = Event {
             id: sub_id.to_string(),
-            conversation_id: Some(self.root_conversation_id()),
+            conversation_id: Some(conversation_id),
             task_id: self.current_task_id(),
             msg,
         };
@@ -872,6 +876,7 @@ impl Session {
         turn_diff_tracker: &mut TurnDiffTracker,
         sub_id: &str,
         call_id: &str,
+        conversation_id: Uuid,
         output: &ExecToolCallOutput,
         is_apply_patch: bool,
     ) {
@@ -906,7 +911,7 @@ impl Session {
 
         let event = Event {
             id: sub_id.to_string(),
-            conversation_id: Some(self.root_conversation_id()),
+            conversation_id: Some(conversation_id),
             task_id: self.current_task_id(),
             msg,
         };
@@ -920,7 +925,7 @@ impl Session {
                 let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
                 let event = Event {
                     id: sub_id.into(),
-                    conversation_id: Some(self.root_conversation_id()),
+                    conversation_id: Some(conversation_id),
                     task_id: self.current_task_id(),
                     msg,
                 };
@@ -971,6 +976,7 @@ impl Session {
             turn_diff_tracker,
             &sub_id,
             &call_id,
+            begin_ctx.conversation_id,
             borrowed,
             is_apply_patch,
         )
@@ -982,10 +988,15 @@ impl Session {
     /// Helper that emits a BackgroundEvent with the given message. This keeps
     /// the call‑sites terse so adding more diagnostics does not clutter the
     /// core agent logic.
-    async fn notify_background_event(&self, sub_id: &str, message: impl Into<String>) {
+    async fn notify_background_event_for(
+        &self,
+        sub_id: &str,
+        conversation_id: Uuid,
+        message: impl Into<String>,
+    ) {
         let event = Event {
             id: sub_id.to_string(),
-            conversation_id: Some(self.root_conversation_id()),
+            conversation_id: Some(conversation_id),
             task_id: self.current_task_id(),
             msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
                 message: message.into(),
@@ -996,35 +1007,36 @@ impl Session {
 
     /// Build the full turn input by concatenating the current conversation
     /// history with additional items for this turn.
-    pub fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
-        [
-            self.root_conversation
-                .state
-                .lock_unchecked()
-                .history
-                .contents(),
-            extra,
-        ]
-        .concat()
+    pub fn turn_input_with_history_for(
+        &self,
+        conv: &Arc<Conversation>,
+        extra: Vec<ResponseItem>,
+    ) -> Vec<ResponseItem> {
+        [conv.state.lock_unchecked().history.contents(), extra].concat()
     }
 
     /// Returns the input if there was no task running to inject into
-    pub fn inject_input(&self, input: Vec<InputItem>) -> Result<(), Vec<InputItem>> {
+    pub fn inject_input_for_conv(
+        &self,
+        conversation_id: Uuid,
+        input: Vec<InputItem>,
+    ) -> Result<(), Vec<InputItem>> {
         let mut state = self.state.lock_unchecked();
         if state.current_task.is_some() {
-            self.root_conversation
-                .state
-                .lock_unchecked()
-                .pending_input
-                .push(input.into());
-            Ok(())
+            if let Ok(map) = self.conversations.read() {
+                if let Some(conv) = map.get(&conversation_id) {
+                    conv.state.lock_unchecked().pending_input.push(input.into());
+                    return Ok(());
+                }
+            }
+            Err(input)
         } else {
             Err(input)
         }
     }
 
-    pub fn get_pending_input(&self) -> Vec<ResponseInputItem> {
-        let mut conv_state = self.root_conversation.state.lock_unchecked();
+    pub fn get_pending_input_for(&self, conv: &Arc<Conversation>) -> Vec<ResponseInputItem> {
+        let mut conv_state = conv.state.lock_unchecked();
         if conv_state.pending_input.is_empty() {
             Vec::with_capacity(0)
         } else {
@@ -1102,6 +1114,7 @@ pub(crate) struct ExecCommandContext {
     pub(crate) call_id: String,
     pub(crate) command_for_display: Vec<String>,
     pub(crate) cwd: PathBuf,
+    pub(crate) conversation_id: Uuid,
     pub(crate) apply_patch: Option<ApplyPatchCommandContext>,
 }
 
@@ -1133,6 +1146,7 @@ impl Clone for AgentTask {
 impl AgentTask {
     fn spawn(
         sess: Arc<Session>,
+        conv: Arc<Conversation>,
         turn_context: Arc<TurnContext>,
         sub_id: String,
         input: Vec<InputItem>,
@@ -1142,9 +1156,18 @@ impl AgentTask {
             let sess_clone = sess.clone();
             let sub_id = sub_id.clone();
             let tc = Arc::clone(&turn_context);
+            let conv_clone = conv.clone();
             let task_id_clone = task_id;
             tokio::spawn(async move {
-                run_task(sess_clone, tc.as_ref(), sub_id, task_id_clone, input).await
+                run_task(
+                    sess_clone,
+                    conv_clone,
+                    tc.as_ref(),
+                    sub_id,
+                    task_id_clone,
+                    input,
+                )
+                .await
             })
             .abort_handle()
         };
@@ -1231,11 +1254,17 @@ async fn submission_loop(
                 sess.interrupt_task();
             }
             Op::UserInput { items } => {
-                // attempt to inject input into current task
-                if let Err(items) = sess.inject_input(items) {
-                    // no current task, spawn a new one
-                    let task =
-                        AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
+                // attempt to inject input into current task (root conversation)
+                let root_id = sess.root_conversation_id();
+                if let Err(items) = sess.inject_input_for_conv(root_id, items) {
+                    // no current task or no matching conversation, spawn a new one on root
+                    let task = AgentTask::spawn(
+                        sess.clone(),
+                        Arc::clone(&sess.root_conversation),
+                        Arc::clone(&turn_context),
+                        sub.id,
+                        items,
+                    );
                     sess.set_task(task);
                 }
             }
@@ -1248,8 +1277,9 @@ async fn submission_loop(
                 effort,
                 summary,
             } => {
-                // attempt to inject input into current task
-                if let Err(items) = sess.inject_input(items) {
+                // attempt to inject input into current task on root conversation
+                let root_id = sess.root_conversation_id();
+                if let Err(items) = sess.inject_input_for_conv(root_id, items) {
                     // Derive a fresh TurnContext for this turn using the provided overrides.
                     let provider = turn_context.client.get_provider();
 
@@ -1291,9 +1321,14 @@ async fn submission_loop(
                         storage_policy: turn_context.storage_policy.clone(),
                     };
 
-                    // no current task, spawn a new one with the per‑turn context
-                    let task =
-                        AgentTask::spawn(sess.clone(), Arc::new(fresh_turn_context), sub.id, items);
+                    // no current task, spawn a new one with the per‑turn context on root conversation
+                    let task = AgentTask::spawn(
+                        sess.clone(),
+                        Arc::clone(&sess.root_conversation),
+                        Arc::new(fresh_turn_context),
+                        sub.id,
+                        items,
+                    );
                     sess.set_task(task);
                 }
             }
@@ -1362,9 +1397,12 @@ async fn submission_loop(
                 const SUMMARIZATION_PROMPT: &str = include_str!("prompt_for_compact_command.md");
 
                 // Attempt to inject input into current task
-                if let Err(items) = sess.inject_input(vec![InputItem::Text {
-                    text: "Start Summarization".to_string(),
-                }]) {
+                if let Err(items) = sess.inject_input_for_conv(
+                    sess.root_conversation_id(),
+                    vec![InputItem::Text {
+                        text: "Start Summarization".to_string(),
+                    }],
+                ) {
                     let task = AgentTask::compact(
                         sess.clone(),
                         Arc::clone(&turn_context),
@@ -1432,6 +1470,7 @@ async fn submission_loop(
 ///   conversation history and consider the task complete.
 async fn run_task(
     sess: Arc<Session>,
+    conv: Arc<Conversation>,
     turn_context: &TurnContext,
     sub_id: String,
     task_id: Uuid,
@@ -1442,7 +1481,7 @@ async fn run_task(
     }
     let event = Event {
         id: sub_id.clone(),
-        conversation_id: Some(sess.root_conversation_id()),
+        conversation_id: Some(conv.id),
         task_id: Some(task_id),
         msg: EventMsg::TaskStarted,
     };
@@ -1451,7 +1490,7 @@ async fn run_task(
     }
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    sess.record_conversation_items(&[initial_input_for_turn.clone().into()])
+    sess.record_conversation_items_for(&conv, &[initial_input_for_turn.clone().into()])
         .await;
 
     let mut last_agent_message: Option<String> = None;
@@ -1464,18 +1503,19 @@ async fn run_task(
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
         let pending_input = sess
-            .get_pending_input()
+            .get_pending_input_for(&conv)
             .into_iter()
             .map(ResponseItem::from)
             .collect::<Vec<ResponseItem>>();
-        sess.record_conversation_items(&pending_input).await;
+        sess.record_conversation_items_for(&conv, &pending_input)
+            .await;
 
         // Construct the input that we will send to the model. When using the
         // Chat completions API (or ZDR clients), the model needs the full
         // conversation history on each turn. The rollout file, however, should
         // only record the new items that originated in this turn so that it
         // represents an append-only log without duplicates.
-        let turn_input: Vec<ResponseItem> = sess.turn_input_with_history(pending_input);
+        let turn_input: Vec<ResponseItem> = sess.turn_input_with_history_for(&conv, pending_input);
 
         let turn_input_messages: Vec<String> = turn_input
             .iter()
@@ -1586,8 +1626,11 @@ async fn run_task(
 
                 // Only attempt to take the lock if there is something to record.
                 if !items_to_record_in_conversation_history.is_empty() {
-                    sess.record_conversation_items(&items_to_record_in_conversation_history)
-                        .await;
+                    sess.record_conversation_items_for(
+                        &conv,
+                        &items_to_record_in_conversation_history,
+                    )
+                    .await;
                 }
 
                 if responses.is_empty() {
@@ -1607,7 +1650,7 @@ async fn run_task(
                 info!("Turn error: {e:#}");
                 let event = Event {
                     id: sub_id.clone(),
-                    conversation_id: Some(sess.root_conversation_id()),
+                    conversation_id: Some(conv.id),
                     task_id: sess.current_task_id(),
                     msg: EventMsg::Error(ErrorEvent {
                         message: e.to_string(),
@@ -1624,7 +1667,7 @@ async fn run_task(
     sess.task_registry.remove(&task_id);
     let event = Event {
         id: sub_id,
-        conversation_id: Some(sess.root_conversation_id()),
+        conversation_id: Some(conv.id),
         task_id: Some(task_id),
         msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),
     };
@@ -1652,7 +1695,16 @@ async fn run_turn(
 
     let mut retries = 0;
     loop {
-        match try_run_turn(sess, turn_context, turn_diff_tracker, &sub_id, &prompt).await {
+        match try_run_turn(
+            sess,
+            &conv,
+            turn_context,
+            turn_diff_tracker,
+            &sub_id,
+            &prompt,
+        )
+        .await
+        {
             Ok(output) => return Ok(output),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
@@ -1675,8 +1727,9 @@ async fn run_turn(
                     // Surface retry information to any UI/front‑end so the
                     // user understands what is happening instead of staring
                     // at a seemingly frozen screen.
-                    sess.notify_background_event(
+                    sess.notify_background_event_for(
                         &sub_id,
+                        conv.id,
                         format!(
                             "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
                         ),
@@ -1704,6 +1757,7 @@ struct ProcessedResponseItem {
 
 async fn try_run_turn(
     sess: &Session,
+    conv: &Arc<Conversation>,
     turn_context: &TurnContext,
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: &str,
@@ -1796,6 +1850,7 @@ async fn try_run_turn(
             ResponseEvent::OutputItemDone(item) => {
                 let response = handle_response_item(
                     sess,
+                    conv,
                     turn_context,
                     turn_diff_tracker,
                     sub_id,
@@ -1812,7 +1867,7 @@ async fn try_run_turn(
                     sess.tx_event
                         .send(Event {
                             id: sub_id.to_string(),
-                            conversation_id: Some(sess.root_conversation_id()),
+                            conversation_id: Some(conv.id),
                             task_id: sess.current_task_id(),
                             msg: EventMsg::TokenCount(token_usage),
                         })
@@ -1825,7 +1880,7 @@ async fn try_run_turn(
                     let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
                     let event = Event {
                         id: sub_id.to_string(),
-                        conversation_id: Some(sess.root_conversation_id()),
+                        conversation_id: Some(conv.id),
                         task_id: sess.current_task_id(),
                         msg,
                     };
@@ -1836,13 +1891,13 @@ async fn try_run_turn(
             }
             ResponseEvent::OutputTextDelta(delta) => {
                 {
-                    let mut st = sess.root_conversation.state.lock_unchecked();
+                    let mut st = conv.state.lock_unchecked();
                     st.history.append_assistant_text(&delta);
                 }
 
                 let event = Event {
                     id: sub_id.to_string(),
-                    conversation_id: Some(sess.root_conversation_id()),
+                    conversation_id: Some(conv.id),
                     task_id: sess.current_task_id(),
                     msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
                 };
@@ -1851,7 +1906,7 @@ async fn try_run_turn(
             ResponseEvent::ReasoningSummaryDelta(delta) => {
                 let event = Event {
                     id: sub_id.to_string(),
-                    conversation_id: Some(sess.root_conversation_id()),
+                    conversation_id: Some(conv.id),
                     task_id: sess.current_task_id(),
                     msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }),
                 };
@@ -1860,7 +1915,7 @@ async fn try_run_turn(
             ResponseEvent::ReasoningSummaryPartAdded => {
                 let event = Event {
                     id: sub_id.to_string(),
-                    conversation_id: Some(sess.root_conversation_id()),
+                    conversation_id: Some(conv.id),
                     task_id: sess.current_task_id(),
                     msg: EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {}),
                 };
@@ -1870,7 +1925,7 @@ async fn try_run_turn(
                 if sess.show_raw_agent_reasoning {
                     let event = Event {
                         id: sub_id.to_string(),
-                        conversation_id: Some(sess.root_conversation_id()),
+                        conversation_id: Some(conv.id),
                         task_id: sess.current_task_id(),
                         msg: EventMsg::AgentReasoningRawContentDelta(
                             AgentReasoningRawContentDeltaEvent { delta },
@@ -1902,8 +1957,10 @@ async fn run_compact_task(
     }
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    let turn_input: Vec<ResponseItem> =
-        sess.turn_input_with_history(vec![initial_input_for_turn.clone().into()]);
+    let turn_input: Vec<ResponseItem> = sess.turn_input_with_history_for(
+        &sess.root_conversation,
+        vec![initial_input_for_turn.clone().into()],
+    );
 
     let prompt = Prompt {
         input: turn_input,
@@ -1925,8 +1982,9 @@ async fn run_compact_task(
                 if retries < max_retries {
                     retries += 1;
                     let delay = backoff(retries);
-                    sess.notify_background_event(
+                    sess.notify_background_event_for(
                         &sub_id,
+                        sess.root_conversation_id(),
                         format!(
                             "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
                         ),
@@ -1976,6 +2034,7 @@ async fn run_compact_task(
 
 async fn handle_response_item(
     sess: &Session,
+    conv: &Arc<Conversation>,
     turn_context: &TurnContext,
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: &str,
@@ -1988,7 +2047,7 @@ async fn handle_response_item(
                 if let ContentItem::OutputText { text } = item {
                     let event = Event {
                         id: sub_id.to_string(),
-                        conversation_id: Some(sess.root_conversation_id()),
+                        conversation_id: Some(conv.id),
                         task_id: sess.current_task_id(),
                         msg: EventMsg::AgentMessage(AgentMessageEvent { message: text }),
                     };
@@ -2009,7 +2068,7 @@ async fn handle_response_item(
                 };
                 let event = Event {
                     id: sub_id.to_string(),
-                    conversation_id: Some(sess.root_conversation_id()),
+                    conversation_id: Some(conv.id),
                     task_id: sess.current_task_id(),
                     msg: EventMsg::AgentReasoning(AgentReasoningEvent { text }),
                 };
@@ -2025,7 +2084,7 @@ async fn handle_response_item(
                     };
                     let event = Event {
                         id: sub_id.to_string(),
-                        conversation_id: Some(sess.root_conversation_id()),
+                        conversation_id: Some(conv.id),
                         task_id: sess.current_task_id(),
                         msg: EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent {
                             text,
@@ -2046,6 +2105,7 @@ async fn handle_response_item(
             Some(
                 handle_function_call(
                     sess,
+                    conv,
                     turn_context,
                     turn_diff_tracker,
                     sub_id.to_string(),
@@ -2110,6 +2170,7 @@ async fn handle_response_item(
 
 async fn handle_function_call(
     sess: &Session,
+    conv: &Arc<Conversation>,
     turn_context: &TurnContext,
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: String,
@@ -2132,6 +2193,7 @@ async fn handle_function_call(
                 turn_diff_tracker,
                 sub_id,
                 call_id,
+                conv.id,
             )
             .await
         }
@@ -2163,6 +2225,7 @@ async fn handle_function_call(
                 turn_diff_tracker,
                 sub_id,
                 call_id,
+                conv.id,
             )
             .await
         }
@@ -2256,6 +2319,7 @@ async fn handle_container_exec_with_params(
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: String,
     call_id: String,
+    conversation_id: Uuid,
 ) -> ResponseInputItem {
     // check if this was a patch, and apply it if so
     let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
@@ -2403,6 +2467,7 @@ async fn handle_container_exec_with_params(
         call_id: call_id.clone(),
         command_for_display: command_for_display.clone(),
         cwd: params.cwd.clone(),
+        conversation_id,
         apply_patch: apply_patch_exec.map(
             |ApplyPatchExec {
                  action,
@@ -2428,7 +2493,7 @@ async fn handle_container_exec_with_params(
                     sub_id: sub_id.clone(),
                     call_id: call_id.clone(),
                     tx_event: sess.tx_event.clone(),
-                    conversation_id: Some(sess.root_conversation_id()),
+                    conversation_id: Some(conversation_id),
                     task_id: sess.current_task_id(),
                 }),
             },
@@ -2524,8 +2589,12 @@ async fn handle_sandbox_error(
 
     // For now, we categorically ask the user to retry without sandbox and
     // emit the raw error as a background event.
-    sess.notify_background_event(&sub_id, format!("Execution failed: {error}"))
-        .await;
+    sess.notify_background_event_for(
+        &sub_id,
+        exec_command_context.conversation_id,
+        format!("Execution failed: {error}"),
+    )
+    .await;
 
     let rx_approve = sess
         .request_command_approval(
@@ -2545,8 +2614,12 @@ async fn handle_sandbox_error(
             // TODO(ragona): Isn't this a bug? It always saves the command in an | fork?
             sess.add_approved_command(params.command.clone());
             // Inform UI we are retrying without sandbox.
-            sess.notify_background_event(&sub_id, "retrying command without sandbox")
-                .await;
+            sess.notify_background_event_for(
+                &sub_id,
+                exec_command_context.conversation_id,
+                "retrying command without sandbox",
+            )
+            .await;
 
             // This is an escalated retry; the policy will not be
             // examined and the sandbox has been set to `None`.
