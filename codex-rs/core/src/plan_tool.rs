@@ -81,6 +81,8 @@ pub(crate) async fn handle_update_plan(
             session
                 .send_event(Event {
                     id: sub_id.to_string(),
+                    conversation_id: Some(session.root_conversation_id()),
+                    task_id: None,
                     msg: EventMsg::PlanUpdate(args),
                 })
                 .await;

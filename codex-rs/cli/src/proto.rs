@@ -47,6 +47,8 @@ pub async fn run_main(opts: ProtoCli) -> anyhow::Result<()> {
     let synthetic_event = Event {
         // Fake id value.
         id: "".to_string(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::SessionConfigured(session_configured),
     };
     let session_configured_event = match serde_json::to_string(&synthetic_event) {

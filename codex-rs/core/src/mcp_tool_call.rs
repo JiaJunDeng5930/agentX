@@ -76,6 +76,8 @@ pub(crate) async fn handle_mcp_tool_call(
 async fn notify_mcp_tool_call_event(sess: &Session, sub_id: &str, event: EventMsg) {
     sess.send_event(Event {
         id: sub_id.to_string(),
+        conversation_id: Some(sess.root_conversation_id()),
+        task_id: sess.current_task_id(),
         msg: event,
     })
     .await;

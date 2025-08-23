@@ -1,15 +1,32 @@
 use crate::models::ResponseItem;
 
-/// Transcript of conversation history
-#[derive(Debug, Clone, Default)]
+const DEFAULT_MAX_ITEMS: usize = 1024;
+const DEFAULT_MAX_TOKENS: usize = 128_000; // rough token budget
+
+/// Transcript of conversation history with simple size guards
+#[derive(Debug, Clone)]
 pub(crate) struct ConversationHistory {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
+    approx_tokens: usize,
+    max_tokens: usize,
+    max_items: usize,
+}
+
+impl Default for ConversationHistory {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ConversationHistory {
     pub(crate) fn new() -> Self {
-        Self { items: Vec::new() }
+        Self {
+            items: Vec::new(),
+            approx_tokens: 0,
+            max_tokens: DEFAULT_MAX_TOKENS,
+            max_items: DEFAULT_MAX_ITEMS,
+        }
     }
 
     /// Returns a clone of the contents in the transcript.
@@ -29,9 +46,6 @@ impl ConversationHistory {
             }
 
             // Merge adjacent assistant messages into a single history entry.
-            // This prevents duplicates when a partial assistant message was
-            // streamed into history earlier in the turn and the final full
-            // message is recorded at turn end.
             match (&*item, self.items.last_mut()) {
                 (
                     ResponseItem::Message {
@@ -45,21 +59,27 @@ impl ConversationHistory {
                         ..
                     }),
                 ) if new_role == "assistant" && last_role == "assistant" => {
+                    let delta_tokens = estimate_tokens_in_content(new_content);
                     append_text_content(last_content, new_content);
+                    self.approx_tokens = self.approx_tokens.saturating_add(delta_tokens);
                 }
                 _ => {
+                    self.approx_tokens = self.approx_tokens.saturating_add(estimate_tokens(&item));
                     self.items.push(item.clone());
                 }
             }
+            self.enforce_limits();
         }
     }
 
     /// Append a text `delta` to the latest assistant message, creating a new
     /// assistant entry if none exists yet (e.g. first delta for this turn).
     pub(crate) fn append_assistant_text(&mut self, delta: &str) {
+        let delta_tokens = estimate_text_tokens(delta);
         match self.items.last_mut() {
             Some(ResponseItem::Message { role, content, .. }) if role == "assistant" => {
                 append_text_delta(content, delta);
+                self.approx_tokens = self.approx_tokens.saturating_add(delta_tokens);
             }
             _ => {
                 // Start a new assistant message with the delta.
@@ -70,6 +90,8 @@ impl ConversationHistory {
                         text: delta.to_string(),
                     }],
                 });
+                self.approx_tokens = self.approx_tokens.saturating_add(delta_tokens);
+                self.enforce_limits();
             }
         }
     }
@@ -77,6 +99,7 @@ impl ConversationHistory {
     pub(crate) fn keep_last_messages(&mut self, n: usize) {
         if n == 0 {
             self.items.clear();
+            self.approx_tokens = 0;
             return;
         }
 
@@ -85,8 +108,6 @@ impl ConversationHistory {
         for item in self.items.iter().rev() {
             if let ResponseItem::Message { role, content, .. } = item {
                 kept.push(ResponseItem::Message {
-                    // we need to remove the id or the model will complain that messages are sent without
-                    // their reasonings
                     id: None,
                     role: role.clone(),
                     content: content.clone(),
@@ -97,9 +118,26 @@ impl ConversationHistory {
             }
         }
 
-        // Preserve chronological order (oldest to newest) within the kept slice.
         kept.reverse();
         self.items = kept;
+        self.recompute_tokens();
+    }
+
+    fn enforce_limits(&mut self) {
+        while self.items.len() > self.max_items || self.approx_tokens > self.max_tokens {
+            if let Some(removed) = self.items.first().cloned() {
+                self.items.remove(0);
+                let t = estimate_tokens(&removed);
+                self.approx_tokens = self.approx_tokens.saturating_sub(t);
+            } else {
+                self.approx_tokens = 0;
+                break;
+            }
+        }
+    }
+
+    fn recompute_tokens(&mut self) {
+        self.approx_tokens = self.items.iter().map(estimate_tokens).sum();
     }
 }
 
@@ -114,6 +152,35 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::Reasoning { .. } => true,
         ResponseItem::Other => false,
     }
+}
+
+fn estimate_tokens(item: &ResponseItem) -> usize {
+    match item {
+        ResponseItem::Message { content, .. } => estimate_tokens_in_content(content),
+        ResponseItem::FunctionCall {
+            name, arguments, ..
+        } => estimate_text_tokens(name) + estimate_text_tokens(arguments),
+        ResponseItem::FunctionCallOutput { output, .. } => estimate_text_tokens(&output.content),
+        ResponseItem::LocalShellCall { .. } => 8,
+        ResponseItem::Reasoning { .. } => 0,
+        ResponseItem::Other => 0,
+    }
+}
+
+fn estimate_tokens_in_content(content: &Vec<crate::models::ContentItem>) -> usize {
+    content
+        .iter()
+        .map(|c| match c {
+            crate::models::ContentItem::InputText { text }
+            | crate::models::ContentItem::OutputText { text } => estimate_text_tokens(text),
+            _ => 8,
+        })
+        .sum()
+}
+
+fn estimate_text_tokens(s: &str) -> usize {
+    // very rough: ~4 chars per token
+    (s.len() + 3) / 4
 }
 
 /// Helper to append the textual content from `src` into `dst` in place.

@@ -243,6 +243,8 @@ mod tests {
 
         let event = Event {
             id: "1".to_string(),
+            conversation_id: None,
+            task_id: None,
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: Uuid::new_v4(),
                 model: "gpt-4o".to_string(),
@@ -280,6 +282,8 @@ mod tests {
         };
         let event = Event {
             id: "1".to_string(),
+            conversation_id: None,
+            task_id: None,
             msg: EventMsg::SessionConfigured(session_configured_event.clone()),
         };
         let meta = OutgoingNotificationMeta {

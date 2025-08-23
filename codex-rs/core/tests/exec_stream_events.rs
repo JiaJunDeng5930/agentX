@@ -37,6 +37,8 @@ async fn test_exec_stdout_stream_events_echo() {
         sub_id: "test-sub".to_string(),
         call_id: "call-1".to_string(),
         tx_event: tx,
+        conversation_id: None,
+        task_id: None,
     };
 
     let cmd = vec![
@@ -87,6 +89,8 @@ async fn test_exec_stderr_stream_events_echo() {
         sub_id: "test-sub".to_string(),
         call_id: "call-2".to_string(),
         tx_event: tx,
+        conversation_id: None,
+        task_id: None,
     };
 
     let cmd = vec![

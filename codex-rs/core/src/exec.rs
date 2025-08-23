@@ -13,6 +13,7 @@ use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
+use uuid::Uuid;
 
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -73,6 +74,8 @@ pub struct StdoutStream {
     pub sub_id: String,
     pub call_id: String,
     pub tx_event: Sender<Event>,
+    pub conversation_id: Option<Uuid>,
+    pub task_id: Option<Uuid>,
 }
 
 pub async fn process_exec_tool_call(
@@ -349,6 +352,8 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
             });
             let event = Event {
                 id: stream.sub_id.clone(),
+                conversation_id: stream.conversation_id,
+                task_id: stream.task_id,
                 msg,
             };
             #[allow(clippy::let_unit_value)]

@@ -345,6 +345,14 @@ pub enum InputItem {
 pub struct Event {
     /// Submission `id` that this event is correlated with.
     pub id: String,
+    /// Identifier for the conversation that produced this event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub conversation_id: Option<Uuid>,
+    /// Identifier for the task within the conversation, if applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub task_id: Option<Uuid>,
     /// Payload
     pub msg: EventMsg,
 }
@@ -770,6 +778,8 @@ mod tests {
         let session_id: Uuid = uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8");
         let event = Event {
             id: "1234".to_string(),
+            conversation_id: None,
+            task_id: None,
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id,
                 model: "codex-mini-latest".to_string(),

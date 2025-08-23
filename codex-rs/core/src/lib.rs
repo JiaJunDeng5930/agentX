@@ -49,6 +49,7 @@ pub(crate) mod safety;
 pub mod seatbelt;
 pub mod shell;
 pub mod spawn;
+mod storage_policy;
 pub mod turn_diff_tracker;
 pub mod user_agent;
 mod user_notification;
@@ -61,5 +62,3 @@ pub use codex_protocol::protocol;
 // Re-export protocol config enums to ensure call sites can use the same types
 // as those in the protocol crate when constructing protocol messages.
 pub use codex_protocol::config_types as protocol_config_types;
-
-
