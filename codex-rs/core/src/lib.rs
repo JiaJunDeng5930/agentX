@@ -27,6 +27,7 @@ mod is_safe_command;
 pub mod landlock;
 mod mcp_connection_manager;
 mod mcp_tool_call;
+mod mcp_view;
 mod message_history;
 mod model_provider_info;
 pub mod parse_command;

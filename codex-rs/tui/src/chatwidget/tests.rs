@@ -59,6 +59,8 @@ fn final_answer_without_newline_is_flushed_immediately() {
     // Simulate a streaming answer without any newline characters.
     chat.handle_codex_event(Event {
         id: "sub-a".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
             delta: "Hi! How can I help with codex-rs or anything else today?".into(),
         }),
@@ -67,6 +69,8 @@ fn final_answer_without_newline_is_flushed_immediately() {
     // Now simulate the final AgentMessage which should flush the pending line immediately.
     chat.handle_codex_event(Event {
         id: "sub-a".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Hi! How can I help with codex-rs or anything else today?".into(),
         }),
@@ -201,6 +205,8 @@ fn exec_history_cell_shows_working_then_completed() {
     // Begin command
     chat.handle_codex_event(Event {
         id: "call-1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "call-1".into(),
             command: vec!["bash".into(), "-lc".into(), "echo done".into()],
@@ -217,6 +223,8 @@ fn exec_history_cell_shows_working_then_completed() {
     // End command successfully
     chat.handle_codex_event(Event {
         id: "call-1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "call-1".into(),
             stdout: "done".into(),
@@ -246,6 +254,8 @@ fn exec_history_cell_shows_working_then_failed() {
     // Begin command
     chat.handle_codex_event(Event {
         id: "call-2".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "call-2".into(),
             command: vec!["bash".into(), "-lc".into(), "false".into()],
@@ -262,6 +272,8 @@ fn exec_history_cell_shows_working_then_failed() {
     // End command with failure
     chat.handle_codex_event(Event {
         id: "call-2".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "call-2".into(),
             stdout: String::new(),
@@ -441,6 +453,8 @@ fn apply_patch_events_emit_history_cells() {
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ApplyPatchApprovalRequest(ev),
     });
     let cells = drain_insert_history(&rx);
@@ -466,6 +480,8 @@ fn apply_patch_events_emit_history_cells() {
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::PatchApplyBegin(begin),
     });
     let cells = drain_insert_history(&rx);
@@ -485,6 +501,8 @@ fn apply_patch_events_emit_history_cells() {
     };
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::PatchApplyEnd(end),
     });
     let cells = drain_insert_history(&rx);
@@ -515,6 +533,8 @@ fn apply_patch_approval_sends_op_with_submission_id() {
     };
     chat.handle_codex_event(Event {
         id: "sub-123".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ApplyPatchApprovalRequest(ev),
     });
 
@@ -549,6 +569,8 @@ fn apply_patch_full_flow_integration_like() {
     );
     chat.handle_codex_event(Event {
         id: "sub-xyz".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "call-1".into(),
             changes,
@@ -592,6 +614,8 @@ fn apply_patch_full_flow_integration_like() {
     );
     chat.handle_codex_event(Event {
         id: "sub-xyz".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
             call_id: "call-1".into(),
             auto_approved: false,
@@ -600,6 +624,8 @@ fn apply_patch_full_flow_integration_like() {
     });
     chat.handle_codex_event(Event {
         id: "sub-xyz".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
             call_id: "call-1".into(),
             stdout: String::from("ok"),
@@ -623,6 +649,8 @@ fn apply_patch_untrusted_shows_approval_modal() {
     );
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "call-1".into(),
             changes,
@@ -671,6 +699,8 @@ fn apply_patch_request_shows_diff_summary() {
     );
     chat.handle_codex_event(Event {
         id: "sub-apply".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id: "call-apply".into(),
             changes,
@@ -722,6 +752,8 @@ fn plan_update_renders_history_cell() {
     };
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::PlanUpdate(update),
     });
     let cells = drain_insert_history(&rx);
@@ -743,6 +775,8 @@ fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
     // Answer: no header until a newline commit
     chat.handle_codex_event(Event {
         id: "sub-a".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
             delta: "Hello".into(),
         }),
@@ -770,6 +804,8 @@ fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
     // Newline arrives, then header is emitted
     chat.handle_codex_event(Event {
         id: "sub-a".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
             delta: "!\n".into(),
         }),
@@ -799,6 +835,8 @@ fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
     let (mut chat2, rx2, _op_rx2) = make_chatwidget_manual();
     chat2.handle_codex_event(Event {
         id: "sub-b".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "Thinking".into(),
         }),
@@ -831,12 +869,16 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     // Begin turn
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::TaskStarted,
     });
 
     // First finalized assistant message
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "First message".into(),
         }),
@@ -845,6 +887,8 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     // Second finalized assistant message in the same turn
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Second message".into(),
         }),
@@ -853,6 +897,8 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     // End turn
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::TaskComplete(TaskCompleteEvent {
             last_agent_message: None,
         }),
@@ -899,12 +945,16 @@ fn final_reasoning_then_message_without_deltas_are_rendered() {
     // No deltas; only final reasoning followed by final message.
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
             text: "I will first analyze the request.".into(),
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
         }),
@@ -926,24 +976,32 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
     // Stream some reasoning deltas first.
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "I will ".into(),
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "first analyze the ".into(),
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
             delta: "request.".into(),
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentReasoning(AgentReasoningEvent {
             text: "request.".into(),
         }),
@@ -952,12 +1010,16 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
     // Then stream answer deltas, followed by the exact same final message.
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
             delta: "Here is the ".into(),
         }),
     });
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
             delta: "result.".into(),
         }),
@@ -965,6 +1027,8 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
 
     chat.handle_codex_event(Event {
         id: "s1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
         }),

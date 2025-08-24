@@ -605,7 +605,7 @@ impl ChatWidget<'_> {
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         // Reset redraw flag for this dispatch
         self.needs_redraw = false;
-        let Event { id, msg } = event;
+        let Event { id, msg, .. } = event;
 
         match msg {
             EventMsg::AgentMessageDelta(_)

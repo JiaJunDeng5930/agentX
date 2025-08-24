@@ -426,6 +426,8 @@ impl App<'_> {
 
                         self.app_event_tx.send(AppEvent::CodexEvent(Event {
                             id: "1".to_string(),
+                            conversation_id: None,
+                            task_id: None,
                             // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                             //     call_id: "1".to_string(),
                             //     command: vec!["git".into(), "apply".into()],

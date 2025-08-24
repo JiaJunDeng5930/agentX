@@ -180,7 +180,7 @@ fn estimate_tokens_in_content(content: &Vec<crate::models::ContentItem>) -> usiz
 
 fn estimate_text_tokens(s: &str) -> usize {
     // very rough: ~4 chars per token
-    (s.len() + 3) / 4
+    s.len().div_ceil(4)
 }
 
 /// Helper to append the textual content from `src` into `dst` in place.

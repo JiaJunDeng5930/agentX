@@ -38,6 +38,8 @@ pub(crate) fn spawn_agent(
         let ev = codex_core::protocol::Event {
             // The `id` does not matter for rendering, so we can use a fake value.
             id: "".to_string(),
+            conversation_id: None,
+            task_id: None,
             msg: codex_core::protocol::EventMsg::SessionConfigured(session_configured),
         };
         app_event_tx_clone.send(AppEvent::CodexEvent(ev));

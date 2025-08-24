@@ -10,6 +10,7 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 pub const CODEX_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
 
@@ -45,6 +46,7 @@ pub(crate) async fn apply_patch(
     sub_id: &str,
     call_id: &str,
     action: ApplyPatchAction,
+    conversation_id: Uuid,
 ) -> InternalApplyPatchInvocation {
     match assess_patch_safety(
         &action,
@@ -67,7 +69,14 @@ pub(crate) async fn apply_patch(
             // that similar patches can be auto-approved in the future during
             // this session.
             let rx_approve = sess
-                .request_patch_approval(sub_id.to_owned(), call_id.to_owned(), &action, None, None)
+                .request_patch_approval_for(
+                    conversation_id,
+                    sub_id.to_owned(),
+                    call_id.to_owned(),
+                    &action,
+                    None,
+                    None,
+                )
                 .await;
             match rx_approve.await.unwrap_or_default() {
                 ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {

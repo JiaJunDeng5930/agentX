@@ -519,7 +519,9 @@ async fn apply_bespoke_event_handling(
     outgoing: Arc<OutgoingMessageSender>,
     pending_interrupts: Arc<Mutex<HashMap<Uuid, Vec<RequestId>>>>,
 ) {
-    let Event { id: event_id, msg } = event;
+    let Event {
+        id: event_id, msg, ..
+    } = event;
     match msg {
         EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,

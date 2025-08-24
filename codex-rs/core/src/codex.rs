@@ -1,14 +1,16 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::RwLock as StdRwLock;
 use std::sync::atomic::AtomicU64;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -60,6 +62,7 @@ use crate::exec_env::create_env;
 use crate::is_safe_command::is_known_safe_command;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_tool_call::handle_mcp_tool_call;
+use crate::mcp_view::McpView;
 use crate::model_family::find_family_for_model;
 use crate::models::ContentItem;
 use crate::models::FunctionCallOutputPayload;
@@ -241,6 +244,7 @@ struct Conversation {
     id: Uuid,
     state: Mutex<ConversationState>,
     storage_policy: StoragePolicy,
+    mcp_view: McpView,
 }
 
 struct TaskRegistry {
@@ -294,6 +298,7 @@ impl Hash for CommandKey {
 pub(crate) struct Session {
     session_id: Uuid,
     tx_event: Sender<Event>,
+    session_started: Instant,
 
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
@@ -471,7 +476,7 @@ impl Session {
                 let message = format!("failed to initialize rollout recorder: {e}");
                 post_session_configured_error_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
-                    conversation_id: Some(session_id),
+                    conversation_id: None,
                     task_id: None,
                     msg: EventMsg::Error(ErrorEvent {
                         message: message.clone(),
@@ -566,6 +571,7 @@ impl Session {
                 history: ConversationHistory::new(),
             }),
             storage_policy: turn_context.storage_policy.clone(),
+            mcp_view: McpView::new_from_manager(&mcp_connection_manager),
         });
         if let Some(restored_items) = restored_items {
             root_conversation
@@ -577,6 +583,7 @@ impl Session {
         let sess = Arc::new(Session {
             session_id,
             tx_event: tx_event.clone(),
+            session_started: Instant::now(),
             mcp_connection_manager,
             notify,
             state: Mutex::new(state),
@@ -654,7 +661,7 @@ impl Session {
         }
     }
 
-    fn current_task_id(&self) -> Option<Uuid> {
+    pub(crate) fn current_task_id(&self) -> Option<Uuid> {
         self.state
             .lock_unchecked()
             .current_task
@@ -677,6 +684,7 @@ impl Session {
                 history: ConversationHistory::new(),
             }),
             storage_policy: self.root_conversation.storage_policy.clone(),
+            mcp_view: McpView::new_from_manager(&self.mcp_connection_manager),
         });
         if let Ok(mut map) = self.conversations.write() {
             map.insert(id, conv);
@@ -690,13 +698,26 @@ impl Session {
         if id == self.root_conversation_id() {
             return; // keep root for compatibility
         }
+        // If current task belongs to this conversation, abort it first.
+        {
+            let mut st = self.state.lock_unchecked();
+            if let Some(task) = st.current_task.take() {
+                if task.conv_id == id {
+                    task.abort(TurnAbortReason::Interrupted);
+                } else {
+                    // put it back if it was a different conversation
+                    st.current_task = Some(task);
+                }
+            }
+        }
         if let Ok(mut map) = self.conversations.write() {
             map.remove(&id);
         }
     }
 
-    pub async fn request_command_approval(
+    pub async fn request_command_approval_for(
         &self,
+        conversation_id: Uuid,
         sub_id: String,
         call_id: String,
         command: Vec<String>,
@@ -706,7 +727,7 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event = Event {
             id: sub_id.clone(),
-            conversation_id: Some(self.root_conversation_id()),
+            conversation_id: Some(conversation_id),
             task_id: self.current_task_id(),
             msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                 call_id,
@@ -723,8 +744,9 @@ impl Session {
         rx_approve
     }
 
-    pub async fn request_patch_approval(
+    pub async fn request_patch_approval_for(
         &self,
+        conversation_id: Uuid,
         sub_id: String,
         call_id: String,
         action: &ApplyPatchAction,
@@ -734,7 +756,7 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event = Event {
             id: sub_id.clone(),
-            conversation_id: Some(self.root_conversation_id()),
+            conversation_id: Some(conversation_id),
             task_id: self.current_task_id(),
             msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                 call_id,
@@ -799,8 +821,17 @@ impl Session {
         debug!("Recording items for conversation: {items:?}");
         // Respect storage policy when recording to rollout.
         let storage_policy = conv.storage_policy.clone();
-        if matches!(storage_policy, StoragePolicy::Full | StoragePolicy::Ttl(_)) {
-            self.record_state_snapshot(items).await;
+        match storage_policy {
+            StoragePolicy::Full => {
+                self.record_state_snapshot(items).await;
+            }
+            StoragePolicy::Ttl(ttl) => {
+                // When TTL expires, degrade to headers-only (skip item bodies in rollout).
+                if self.session_started.elapsed() < ttl {
+                    self.record_state_snapshot(items).await;
+                }
+            }
+            _ => {}
         }
 
         // Record to in-memory history for prompt construction.
@@ -1021,7 +1052,7 @@ impl Session {
         conversation_id: Uuid,
         input: Vec<InputItem>,
     ) -> Result<(), Vec<InputItem>> {
-        let mut state = self.state.lock_unchecked();
+        let state = self.state.lock_unchecked();
         if state.current_task.is_some() {
             if let Ok(map) = self.conversations.read() {
                 if let Some(conv) = map.get(&conversation_id) {
@@ -1129,6 +1160,7 @@ pub(crate) struct AgentTask {
     sess: std::sync::Weak<Session>,
     sub_id: String,
     task_id: Uuid,
+    conv_id: Uuid,
     handle: AbortHandle,
 }
 
@@ -1138,6 +1170,7 @@ impl Clone for AgentTask {
             sess: self.sess.clone(),
             sub_id: self.sub_id.clone(),
             task_id: self.task_id,
+            conv_id: self.conv_id,
             handle: self.handle.clone(),
         }
     }
@@ -1175,6 +1208,7 @@ impl AgentTask {
             sess: Arc::downgrade(&sess),
             sub_id,
             task_id,
+            conv_id: conv.id,
             handle,
         }
     }
@@ -1205,10 +1239,12 @@ impl AgentTask {
             })
             .abort_handle()
         };
+        let conv_id = sess.root_conversation_id();
         Self {
             sess: Arc::downgrade(&sess),
             sub_id,
             task_id,
+            conv_id,
             handle,
         }
     }
@@ -1219,12 +1255,7 @@ impl AgentTask {
             self.handle.abort();
             let event = Event {
                 id: self.sub_id,
-                conversation_id: self
-                    .sess
-                    .upgrade()
-                    .map(|s| s.root_conversation_id())
-                    .map(Some)
-                    .unwrap_or(None),
+                conversation_id: Some(self.conv_id),
                 task_id: Some(self.task_id),
                 msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
             };
@@ -1359,6 +1390,9 @@ async fn submission_loop(
                 let config = config.clone();
                 let tx_event = sess.tx_event.clone();
                 let sub_id = sub.id.clone();
+                // Capture values instead of moving `sess` into the task
+                let convo_id = sess.root_conversation_id();
+                let current_task_id = sess.current_task_id();
 
                 tokio::spawn(async move {
                     // Run lookup in blocking thread because it does file IO + locking.
@@ -1370,8 +1404,8 @@ async fn submission_loop(
 
                     let event = Event {
                         id: sub_id,
-                        conversation_id: Some(sess.root_conversation_id()),
-                        task_id: sess.current_task_id(),
+                        conversation_id: Some(convo_id),
+                        task_id: current_task_id,
                         msg: EventMsg::GetHistoryEntryResponse(
                             crate::protocol::GetHistoryEntryResponseEvent {
                                 offset,
@@ -1532,6 +1566,7 @@ async fn run_task(
             .collect();
         match run_turn(
             &sess,
+            &conv,
             turn_context,
             &mut turn_diff_tracker,
             sub_id.clone(),
@@ -1676,15 +1711,13 @@ async fn run_task(
 
 async fn run_turn(
     sess: &Session,
+    conv: &Arc<Conversation>,
     turn_context: &TurnContext,
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
-    let tools = get_openai_tools(
-        &turn_context.tools_config,
-        Some(sess.mcp_connection_manager.list_all_tools()),
-    );
+    let tools = get_openai_tools(&turn_context.tools_config, Some(conv.mcp_view.list_tools()));
 
     let prompt = Prompt {
         input,
@@ -1697,7 +1730,7 @@ async fn run_turn(
     loop {
         match try_run_turn(
             sess,
-            &conv,
+            conv,
             turn_context,
             turn_diff_tracker,
             &sub_id,
@@ -2155,6 +2188,7 @@ async fn handle_response_item(
                     turn_diff_tracker,
                     sub_id.to_string(),
                     effective_call_id,
+                    conv.id,
                 )
                 .await,
             )
@@ -2324,7 +2358,16 @@ async fn handle_container_exec_with_params(
     // check if this was a patch, and apply it if so
     let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
         MaybeApplyPatchVerified::Body(changes) => {
-            match apply_patch::apply_patch(sess, turn_context, &sub_id, &call_id, changes).await {
+            match apply_patch::apply_patch(
+                sess,
+                turn_context,
+                &sub_id,
+                &call_id,
+                changes,
+                conversation_id,
+            )
+            .await
+            {
                 InternalApplyPatchInvocation::Output(item) => return item,
                 InternalApplyPatchInvocation::DelegateToExec(apply_patch_exec) => {
                     Some(apply_patch_exec)
@@ -2422,7 +2465,8 @@ async fn handle_container_exec_with_params(
         SafetyCheck::AutoApprove { sandbox_type } => sandbox_type,
         SafetyCheck::AskUser => {
             let rx_approve = sess
-                .request_command_approval(
+                .request_command_approval_for(
+                    conversation_id,
                     sub_id.clone(),
                     call_id.clone(),
                     params.command.clone(),
@@ -2597,7 +2641,8 @@ async fn handle_sandbox_error(
     .await;
 
     let rx_approve = sess
-        .request_command_approval(
+        .request_command_approval_for(
+            exec_command_context.conversation_id,
             sub_id.clone(),
             call_id.clone(),
             params.command.clone(),
@@ -2636,7 +2681,7 @@ async fn handle_sandbox_error(
                             sub_id: sub_id.clone(),
                             call_id: call_id.clone(),
                             tx_event: sess.tx_event.clone(),
-                            conversation_id: Some(sess.root_conversation_id()),
+                            conversation_id: Some(exec_command_context.conversation_id),
                             task_id: sess.current_task_id(),
                         }),
                     },
