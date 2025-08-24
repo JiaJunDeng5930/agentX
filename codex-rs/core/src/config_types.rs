@@ -5,11 +5,11 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use strum_macros::Display;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
 use serde::Serialize;
+use strum_macros::Display;
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
@@ -77,21 +77,6 @@ pub enum HistoryPersistence {
 /// Collection of settings that are specific to the TUI.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {}
-
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default, Serialize, Display)]
-#[serde(rename_all = "kebab-case")]
-#[strum(serialize_all = "kebab-case")]
-pub enum SandboxMode {
-    #[serde(rename = "read-only")]
-    #[default]
-    ReadOnly,
-
-    #[serde(rename = "workspace-write")]
-    WorkspaceWrite,
-
-    #[serde(rename = "danger-full-access")]
-    DangerFullAccess,
-}
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
@@ -206,7 +191,6 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum ReasoningEffort {
-    Minimal,
     Low,
     #[default]
     Medium,
@@ -230,26 +214,14 @@ pub enum ReasoningSummary {
     None,
 }
 
-// Conversions from protocol enums to core config enums used where protocol
-// values are supplied by clients and core needs its internal representations.
-impl From<codex_protocol::config_types::ReasoningEffort> for ReasoningEffort {
-    fn from(v: codex_protocol::config_types::ReasoningEffort) -> Self {
-        match v {
-            codex_protocol::config_types::ReasoningEffort::Low => ReasoningEffort::Low,
-            codex_protocol::config_types::ReasoningEffort::Medium => ReasoningEffort::Medium,
-            codex_protocol::config_types::ReasoningEffort::High => ReasoningEffort::High,
-            codex_protocol::config_types::ReasoningEffort::None => ReasoningEffort::None,
-        }
-    }
-}
-
-impl From<codex_protocol::config_types::ReasoningSummary> for ReasoningSummary {
-    fn from(v: codex_protocol::config_types::ReasoningSummary) -> Self {
-        match v {
-            codex_protocol::config_types::ReasoningSummary::Auto => ReasoningSummary::Auto,
-            codex_protocol::config_types::ReasoningSummary::Concise => ReasoningSummary::Concise,
-            codex_protocol::config_types::ReasoningSummary::Detailed => ReasoningSummary::Detailed,
-            codex_protocol::config_types::ReasoningSummary::None => ReasoningSummary::None,
-        }
-    }
+/// Controls output length/detail on GPT-5 models via the Responses API.
+/// Serialized with lowercase values to match the OpenAI API.
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum Verbosity {
+    Low,
+    #[default]
+    Medium,
+    High,
 }

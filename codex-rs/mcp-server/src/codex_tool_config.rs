@@ -1,7 +1,7 @@
 //! Configuration object accepted by the `codex` MCP tool-call.
 
-use codex_core::config_types::SandboxMode;
 use codex_core::protocol::AskForApproval;
+use codex_protocol::config_types::SandboxMode;
 use mcp_types::Tool;
 use mcp_types::ToolInputSchema;
 use schemars::JsonSchema;
@@ -163,6 +163,7 @@ impl CodexToolCallParam {
             include_apply_patch_tool: None,
             disable_response_storage: None,
             show_raw_agent_reasoning: None,
+            tools_web_search_request: None,
         };
 
         let cli_overrides = cli_overrides
