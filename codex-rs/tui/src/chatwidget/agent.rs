@@ -78,6 +78,8 @@ pub(crate) fn spawn_agent_from_existing(
         // Forward the captured `SessionConfigured` event so it can be rendered in the UI.
         let ev = codex_core::protocol::Event {
             id: "".to_string(),
+            conversation_id: None,
+            task_id: None,
             msg: codex_core::protocol::EventMsg::SessionConfigured(session_configured),
         };
         app_event_tx_clone.send(AppEvent::CodexEvent(ev));

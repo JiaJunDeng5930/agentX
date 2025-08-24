@@ -1077,6 +1077,8 @@ impl Session {
     async fn notify_stream_error(&self, sub_id: &str, message: impl Into<String>) {
         let event = Event {
             id: sub_id.to_string(),
+            conversation_id: Some(self.root_conversation_id()),
+            task_id: self.current_task_id(),
             msg: EventMsg::StreamError(StreamErrorEvent {
                 message: message.into(),
             }),
@@ -1102,11 +1104,11 @@ impl Session {
     ) -> Result<(), Vec<InputItem>> {
         let state = self.state.lock_unchecked();
         if state.current_task.is_some() {
-            if let Ok(map) = self.conversations.read() {
-                if let Some(conv) = map.get(&conversation_id) {
-                    conv.state.lock_unchecked().pending_input.push(input.into());
-                    return Ok(());
-                }
+            if let Ok(map) = self.conversations.read()
+                && let Some(conv) = map.get(&conversation_id)
+            {
+                conv.state.lock_unchecked().pending_input.push(input.into());
+                return Ok(());
             }
             Err(input)
         } else {
@@ -1398,19 +1400,22 @@ async fn submission_loop(
                     sandbox_policy: new_sandbox_policy.clone(),
                     shell_environment_policy: prev.shell_environment_policy.clone(),
                     cwd: new_cwd.clone(),
-                    disable_response_storage: prev.disable_response_storage,
+                    storage_policy: prev.storage_policy.clone(),
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
                 turn_context = Arc::new(new_turn_context);
                 if cwd.is_some() || approval_policy.is_some() || sandbox_policy.is_some() {
-                    sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
-                        cwd,
-                        approval_policy,
-                        sandbox_policy,
-                        // Shell is not configurable from turn to turn
-                        None,
-                    ))])
+                    sess.record_conversation_items_for(
+                        &sess.root_conversation,
+                        &[ResponseItem::from(EnvironmentContext::new(
+                            cwd,
+                            approval_policy,
+                            sandbox_policy,
+                            // Shell is not configurable from turn to turn
+                            None,
+                        ))],
+                    )
                     .await;
                 }
             }
@@ -1566,6 +1571,8 @@ async fn submission_loop(
                 let tools = sess.mcp_connection_manager.list_all_tools();
                 let event = Event {
                     id: sub_id,
+                    conversation_id: Some(sess.root_conversation_id()),
+                    task_id: sess.current_task_id(),
                     msg: EventMsg::McpListToolsResponse(
                         crate::protocol::McpListToolsResponseEvent { tools },
                     ),
@@ -1601,20 +1608,20 @@ async fn submission_loop(
                 // Gracefully flush and shutdown rollout recorder on session end so tests
                 // that inspect the rollout file do not race with the background writer.
                 let recorder_opt = sess.rollout.lock_unchecked().take();
-                if let Some(rec) = recorder_opt {
-                    if let Err(e) = rec.shutdown().await {
-                        warn!("failed to shutdown rollout recorder: {e}");
-                        let event = Event {
-                            id: sub.id.clone(),
-                            conversation_id: Some(sess.root_conversation_id()),
-                            task_id: None,
-                            msg: EventMsg::Error(ErrorEvent {
-                                message: "Failed to shutdown rollout recorder".to_string(),
-                            }),
-                        };
-                        if let Err(e) = sess.tx_event.send(event).await {
-                            warn!("failed to send error message: {e:?}");
-                        }
+                if let Some(rec) = recorder_opt
+                    && let Err(e) = rec.shutdown().await
+                {
+                    warn!("failed to shutdown rollout recorder: {e}");
+                    let event = Event {
+                        id: sub.id.clone(),
+                        conversation_id: Some(sess.root_conversation_id()),
+                        task_id: None,
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: "Failed to shutdown rollout recorder".to_string(),
+                        }),
+                    };
+                    if let Err(e) = sess.tx_event.send(event).await {
+                        warn!("failed to send error message: {e:?}");
                     }
                 }
 
@@ -1635,9 +1642,16 @@ async fn submission_loop(
 
                 let event = Event {
                     id: sub_id.clone(),
+                    conversation_id: Some(sess.root_conversation_id()),
+                    task_id: sess.current_task_id(),
                     msg: EventMsg::ConversationHistory(ConversationHistoryResponseEvent {
-                        conversation_id: sess.session_id,
-                        entries: sess.state.lock_unchecked().history.contents(),
+                        conversation_id: sess.root_conversation_id(),
+                        entries: sess
+                            .root_conversation
+                            .state
+                            .lock_unchecked()
+                            .history
+                            .contents(),
                     }),
                 };
                 if let Err(e) = tx_event.send(event).await {
@@ -2070,6 +2084,8 @@ async fn try_run_turn(
                     .tx_event
                     .send(Event {
                         id: sub_id.to_string(),
+                        conversation_id: Some(conv.id),
+                        task_id: sess.current_task_id(),
                         msg: EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id, query: q }),
                     })
                     .await;
@@ -2566,6 +2582,7 @@ async fn handle_custom_tool_call(
                 turn_diff_tracker,
                 sub_id,
                 call_id,
+                sess.root_conversation_id(),
             )
             .await;
 

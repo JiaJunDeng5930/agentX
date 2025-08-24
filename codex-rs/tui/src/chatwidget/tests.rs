@@ -358,6 +358,8 @@ fn exec_history_extends_previous_when_consecutive() {
     // First command
     chat.handle_codex_event(Event {
         id: "call-a".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "call-a".into(),
             command: vec!["bash".into(), "-lc".into(), "echo one".into()],
@@ -372,6 +374,8 @@ fn exec_history_extends_previous_when_consecutive() {
     });
     chat.handle_codex_event(Event {
         id: "call-a".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "call-a".into(),
             stdout: "one".into(),
@@ -388,6 +392,8 @@ fn exec_history_extends_previous_when_consecutive() {
     // Second command
     chat.handle_codex_event(Event {
         id: "call-b".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "call-b".into(),
             command: vec!["bash".into(), "-lc".into(), "echo two".into()],
@@ -402,6 +408,8 @@ fn exec_history_extends_previous_when_consecutive() {
     });
     chat.handle_codex_event(Event {
         id: "call-b".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "call-b".into(),
             stdout: "two".into(),
@@ -975,6 +983,8 @@ fn stream_error_is_rendered_to_history() {
     let msg = "stream error: stream disconnected before completion: idle timeout waiting for SSE; retrying 1/5 in 211ms…";
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::StreamError(StreamErrorEvent {
             message: msg.to_string(),
         }),

@@ -499,6 +499,7 @@ pub(crate) fn get_openai_tools(
             tools.push(create_shell_tool_for_sandbox(sandbox_policy));
         }
         ConfigShellToolType::LocalShell => tools.push(OpenAiTool::LocalShell {}),
+        ConfigShellToolType::StreamableShell => tools.push(create_shell_tool()),
     }
 
     if config.plan_tool {

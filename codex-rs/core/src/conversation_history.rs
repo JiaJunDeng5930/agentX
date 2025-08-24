@@ -163,18 +163,24 @@ fn estimate_tokens(item: &ResponseItem) -> usize {
             name, arguments, ..
         } => estimate_text_tokens(name) + estimate_text_tokens(arguments),
         ResponseItem::FunctionCallOutput { output, .. } => estimate_text_tokens(&output.content),
+        ResponseItem::CustomToolCall { name, input, .. } => {
+            estimate_text_tokens(name) + estimate_text_tokens(input)
+        }
+        ResponseItem::CustomToolCallOutput { output, .. } => estimate_text_tokens(output),
         ResponseItem::LocalShellCall { .. } => 8,
         ResponseItem::Reasoning { .. } => 0,
         ResponseItem::Other => 0,
     }
 }
 
-fn estimate_tokens_in_content(content: &Vec<crate::models::ContentItem>) -> usize {
+fn estimate_tokens_in_content(content: &Vec<codex_protocol::models::ContentItem>) -> usize {
     content
         .iter()
         .map(|c| match c {
-            crate::models::ContentItem::InputText { text }
-            | crate::models::ContentItem::OutputText { text } => estimate_text_tokens(text),
+            codex_protocol::models::ContentItem::InputText { text }
+            | codex_protocol::models::ContentItem::OutputText { text } => {
+                estimate_text_tokens(text)
+            }
             _ => 8,
         })
         .sum()

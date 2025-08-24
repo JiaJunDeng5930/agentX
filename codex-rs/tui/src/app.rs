@@ -26,7 +26,6 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
-// use uuid::Uuid;
 
 pub(crate) struct App {
     pub(crate) server: Arc<ConversationManager>,
@@ -127,10 +126,19 @@ impl App {
                 TuiEvent::Paste(pasted) => {
                     // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
                     // but tui-textarea expects \n. Normalize CR to LF.
-                    // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
-                    // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
                     let pasted = pasted.replace("\r", "\n");
                     self.chat_widget.handle_paste(pasted);
+                    tui.frame_requester().schedule_frame();
+                }
+                TuiEvent::AttachImage {
+                    path,
+                    width,
+                    height,
+                    format_label,
+                } => {
+                    self.chat_widget
+                        .attach_image(path, width, height, format_label);
+                    tui.frame_requester().schedule_frame();
                 }
                 TuiEvent::Draw => {
                     tui.draw(
@@ -142,165 +150,6 @@ impl App {
                             }
                         },
                     )?;
-                }
-                AppEvent::Paste(text) => {
-                    self.dispatch_paste_event(text);
-                }
-                AppEvent::CodexEvent(event) => {
-                    self.dispatch_codex_event(event);
-                }
-                AppEvent::ExitRequest => {
-                    break;
-                }
-                AppEvent::CodexOp(op) => match &mut self.app_state {
-                    AppState::Chat { widget } => widget.submit_op(op),
-                    AppState::Onboarding { .. } => {}
-                },
-                AppEvent::DiffResult(text) => {
-                    if let AppState::Chat { widget } = &mut self.app_state {
-                        widget.add_diff_output(text);
-                    }
-                }
-                AppEvent::DispatchCommand(command) => match command {
-                    SlashCommand::New => {
-                        // User accepted – switch to chat view.
-                        let new_widget = Box::new(ChatWidget::new(
-                            self.config.clone(),
-                            self.server.clone(),
-                            self.app_event_tx.clone(),
-                            None,
-                            Vec::new(),
-                            self.enhanced_keys_supported,
-                        ));
-                        self.app_state = AppState::Chat { widget: new_widget };
-                        self.app_event_tx.send(AppEvent::RequestRedraw);
-                    }
-                    SlashCommand::Init => {
-                        // Guard: do not run if a task is active.
-                        if let AppState::Chat { widget } = &mut self.app_state {
-                            const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
-                            widget.submit_text_message(INIT_PROMPT.to_string());
-                        }
-                    }
-                    SlashCommand::Compact => {
-                        if let AppState::Chat { widget } = &mut self.app_state {
-                            widget.clear_token_usage();
-                            self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
-                        }
-                    }
-                    SlashCommand::Quit => {
-                        break;
-                    }
-                    SlashCommand::Logout => {
-                        if let Err(e) = codex_login::logout(&self.config.codex_home) {
-                            tracing::error!("failed to logout: {e}");
-                        }
-                        break;
-                    }
-                    SlashCommand::Diff => {
-                        if let AppState::Chat { widget } = &mut self.app_state {
-                            widget.add_diff_in_progress();
-                        }
-
-                        let tx = self.app_event_tx.clone();
-                        tokio::spawn(async move {
-                            let text = match get_git_diff().await {
-                                Ok((is_git_repo, diff_text)) => {
-                                    if is_git_repo {
-                                        diff_text
-                                    } else {
-                                        "`/diff` — _not inside a git repository_".to_string()
-                                    }
-                                }
-                                Err(e) => format!("Failed to compute diff: {e}"),
-                            };
-                            tx.send(AppEvent::DiffResult(text));
-                        });
-                    }
-                    SlashCommand::Mention => {
-                        if let AppState::Chat { widget } = &mut self.app_state {
-                            widget.insert_str("@");
-                        }
-                    }
-                    SlashCommand::Status => {
-                        if let AppState::Chat { widget } = &mut self.app_state {
-                            widget.add_status_output();
-                        }
-                    }
-                    #[cfg(debug_assertions)]
-                    SlashCommand::TestApproval => {
-                        use codex_core::protocol::EventMsg;
-                        use std::collections::HashMap;
-
-                        use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-                        use codex_core::protocol::FileChange;
-
-                        self.app_event_tx.send(AppEvent::CodexEvent(Event {
-                            id: "1".to_string(),
-                            conversation_id: None,
-                            task_id: None,
-                            // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                            //     call_id: "1".to_string(),
-                            //     command: vec!["git".into(), "apply".into()],
-                            //     cwd: self.config.cwd.clone(),
-                            //     reason: Some("test".to_string()),
-                            // }),
-                            msg: EventMsg::ApplyPatchApprovalRequest(
-                                ApplyPatchApprovalRequestEvent {
-                                    call_id: "1".to_string(),
-                                    changes: HashMap::from([
-                                        (
-                                            PathBuf::from("/tmp/test.txt"),
-                                            FileChange::Add {
-                                                content: "test".to_string(),
-                                            },
-                                        ),
-                                        (
-                                            PathBuf::from("/tmp/test2.txt"),
-                                            FileChange::Update {
-                                                unified_diff: "+test\n-test2".to_string(),
-                                                move_path: None,
-                                            },
-                                        ),
-                                    ]),
-                                    reason: None,
-                                    grant_root: Some(PathBuf::from("/tmp")),
-                                },
-                            ),
-                        }));
-                    }
-                },
-                AppEvent::OnboardingAuthComplete(result) => {
-                    if let AppState::Onboarding { screen } = &mut self.app_state {
-                        screen.on_auth_complete(result);
-                    }
-                }
-                AppEvent::OnboardingComplete(ChatWidgetArgs {
-                    config,
-                    enhanced_keys_supported,
-                    initial_images,
-                    initial_prompt,
-                }) => {
-                    self.app_state = AppState::Chat {
-                        widget: Box::new(ChatWidget::new(
-                            config,
-                            self.server.clone(),
-                            self.app_event_tx.clone(),
-                            initial_prompt,
-                            initial_images,
-                            enhanced_keys_supported,
-                        )),
-                    }
-                }
-                AppEvent::StartFileSearch(query) => {
-                    if !query.is_empty() {
-                        self.file_search.on_user_query(query);
-                    }
-                }
-                AppEvent::FileSearchResult { query, matches } => {
-                    if let AppState::Chat { widget } = &mut self.app_state {
-                        widget.apply_file_search_result(query, matches);
-                    }
                 }
             }
         }

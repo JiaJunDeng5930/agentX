@@ -1,0 +1,3 @@
+edition = "2024"
+# Stable-friendly rustfmt config. We intentionally omit
+# `imports_granularity = "Item"` here since it's a nightly-only option.
