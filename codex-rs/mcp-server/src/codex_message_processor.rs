@@ -724,8 +724,11 @@ fn derive_config_from_params(
         sandbox: sandbox_mode,
         config: cli_overrides,
         base_instructions,
+        user_instructions,
+        mcp_tool_allowlist,
         include_plan_tool,
         include_apply_patch_tool,
+        tools_web_search_request,
     } = params;
     let overrides = ConfigOverrides {
         model,
@@ -736,11 +739,27 @@ fn derive_config_from_params(
         model_provider: None,
         codex_linux_sandbox_exe,
         base_instructions,
+        user_instructions,
         include_plan_tool,
         include_apply_patch_tool,
         disable_response_storage: None,
         show_raw_agent_reasoning: None,
-        tools_web_search_request: None,
+        tools_web_search_request,
+        // Normalize allowlist entries to server__tool form.
+        mcp_tool_allowlist: mcp_tool_allowlist.map(|v| {
+            v.into_iter()
+                .map(|s| {
+                    if let Some((server, tool)) = s.split_once('/') {
+                        tracing::warn!(
+                            "mcp_tool_allowlist uses deprecated server/tool form; normalizing"
+                        );
+                        format!("{server}__{tool}")
+                    } else {
+                        s
+                    }
+                })
+                .collect()
+        }),
     };
 
     let cli_overrides = cli_overrides

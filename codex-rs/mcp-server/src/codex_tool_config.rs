@@ -159,11 +159,13 @@ impl CodexToolCallParam {
             model_provider: None,
             codex_linux_sandbox_exe,
             base_instructions,
+            user_instructions: None,
             include_plan_tool,
             include_apply_patch_tool: None,
             disable_response_storage: None,
             show_raw_agent_reasoning: None,
             tools_web_search_request: None,
+            mcp_tool_allowlist: None,
         };
 
         let cli_overrides = cli_overrides

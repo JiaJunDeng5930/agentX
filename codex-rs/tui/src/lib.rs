@@ -126,11 +126,13 @@ pub async fn run_main(
         config_profile: cli.config_profile.clone(),
         codex_linux_sandbox_exe,
         base_instructions: None,
+        user_instructions: None,
         include_plan_tool: Some(true),
         include_apply_patch_tool: None,
         disable_response_storage: cli.oss.then_some(true),
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: cli.web_search.then_some(true),
+        mcp_tool_allowlist: None,
     };
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
     let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };

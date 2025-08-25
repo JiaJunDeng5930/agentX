@@ -170,6 +170,8 @@ pub struct Config {
     pub include_apply_patch_tool: bool,
 
     pub tools_web_search_request: bool,
+    /// Optional per‑conversation allowlist of MCP tools (fully‑qualified: server__tool).
+    pub mcp_tool_allowlist: Option<Vec<String>>,
 
     /// The value for the `originator` header included with Responses API requests.
     pub responses_originator_header: String,
@@ -584,11 +586,13 @@ pub struct ConfigOverrides {
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
+    pub user_instructions: Option<String>,
     pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub disable_response_storage: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub mcp_tool_allowlist: Option<Vec<String>>,
 }
 
 impl Config {
@@ -599,7 +603,12 @@ impl Config {
         overrides: ConfigOverrides,
         codex_home: PathBuf,
     ) -> std::io::Result<Self> {
-        let user_instructions = Self::load_instructions(Some(&codex_home));
+        // Prefer explicitly provided user_instructions override; otherwise load
+        // from CODEX_HOME/AGENTS.md (later combined with project docs).
+        let user_instructions = overrides
+            .user_instructions
+            .clone()
+            .or_else(|| Self::load_instructions(Some(&codex_home)));
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
@@ -611,11 +620,13 @@ impl Config {
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             base_instructions,
+            user_instructions: _user_instructions_already_applied,
             include_plan_tool,
             include_apply_patch_tool,
             disable_response_storage,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            mcp_tool_allowlist,
         } = overrides;
 
         let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
@@ -779,6 +790,7 @@ impl Config {
             include_plan_tool: include_plan_tool.unwrap_or(false),
             include_apply_patch_tool: include_apply_patch_tool.unwrap_or(false),
             tools_web_search_request,
+            mcp_tool_allowlist,
             responses_originator_header,
             preferred_auth_method: cfg.preferred_auth_method.unwrap_or(AuthMode::ChatGPT),
             use_experimental_streamable_shell_tool: cfg
@@ -1149,6 +1161,7 @@ disable_response_storage = true
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
+                mcp_tool_allowlist: None,
                 responses_originator_header: "codex_cli_rs".to_string(),
                 preferred_auth_method: AuthMode::ChatGPT,
                 use_experimental_streamable_shell_tool: false,
@@ -1205,6 +1218,7 @@ disable_response_storage = true
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
+            mcp_tool_allowlist: None,
             responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
@@ -1276,6 +1290,7 @@ disable_response_storage = true
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
+            mcp_tool_allowlist: None,
             responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,

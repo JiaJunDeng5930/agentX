@@ -268,13 +268,27 @@ struct ConversationState {
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
 }
+#[derive(Debug, Clone)]
+struct ToolsPrefs {
+    include_plan_tool: bool,
+    include_apply_patch_tool: bool,
+    web_search_request: bool,
+    use_streamable_shell_tool: bool,
+}
+#[derive(Debug, Clone)]
+struct ConversationContext {
+    base_instructions: Option<String>,
+    user_instructions: Option<String>,
+    mcp_view: McpView,
+    tools_prefs: ToolsPrefs,
+}
 
 #[derive(Debug)]
 struct Conversation {
     id: Uuid,
     state: Mutex<ConversationState>,
     storage_policy: StoragePolicy,
-    mcp_view: McpView,
+    ctx: ConversationContext,
 }
 
 struct TaskRegistry {
@@ -359,13 +373,10 @@ pub(crate) struct TurnContext {
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
     pub(crate) cwd: PathBuf,
-    pub(crate) base_instructions: Option<String>,
-    pub(crate) user_instructions: Option<String>,
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) storage_policy: StoragePolicy,
-    pub(crate) tools_config: ToolsConfig,
 }
 
 impl TurnContext {
@@ -577,17 +588,6 @@ impl Session {
         );
         let turn_context = TurnContext {
             client,
-            tools_config: ToolsConfig::new(
-                &config.model_family,
-                approval_policy,
-                sandbox_policy.clone(),
-                config.include_plan_tool,
-                config.include_apply_patch_tool,
-                config.tools_web_search_request,
-                config.use_experimental_streamable_shell_tool,
-            ),
-            user_instructions,
-            base_instructions,
             approval_policy,
             sandbox_policy,
             shell_environment_policy: config.shell_environment_policy.clone(),
@@ -598,6 +598,24 @@ impl Session {
                 StoragePolicy::Full
             },
         };
+        // Build MCP view with optional allowlist
+        let mut mcp_view = McpView::new_from_manager(&mcp_connection_manager);
+        if let Some(allow) = &config.mcp_tool_allowlist {
+            let allow: std::collections::HashSet<String> = allow
+                .iter()
+                .map(|s| {
+                    if let Some((server, tool)) = s.split_once('/') {
+                        tracing::warn!(
+                            "mcp_tool_allowlist uses deprecated server/tool form; normalizing"
+                        );
+                        format!("{server}__{tool}")
+                    } else {
+                        s.clone()
+                    }
+                })
+                .collect();
+            mcp_view = mcp_view.with_allowlist(allow);
+        }
         let root_conversation = Arc::new(Conversation {
             id: session_id,
             state: Mutex::new(ConversationState {
@@ -605,7 +623,17 @@ impl Session {
                 history: ConversationHistory::new(),
             }),
             storage_policy: turn_context.storage_policy.clone(),
-            mcp_view: McpView::new_from_manager(&mcp_connection_manager),
+            ctx: ConversationContext {
+                base_instructions,
+                user_instructions: user_instructions.clone(),
+                mcp_view,
+                tools_prefs: ToolsPrefs {
+                    include_plan_tool: config.include_plan_tool,
+                    include_apply_patch_tool: config.include_apply_patch_tool,
+                    web_search_request: config.tools_web_search_request,
+                    use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+                },
+            },
         });
         if let Some(restored_items) = restored_items {
             root_conversation
@@ -636,7 +664,7 @@ impl Session {
         // record the initial user instructions and environment context,
         // regardless of whether we restored items.
         let mut conversation_items = Vec::<ResponseItem>::with_capacity(2);
-        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
+        if let Some(user_instructions) = root_conversation.ctx.user_instructions.as_deref() {
             conversation_items.push(Prompt::format_user_instructions_message(user_instructions));
         }
         conversation_items.push(ResponseItem::from(EnvironmentContext::new(
@@ -719,7 +747,12 @@ impl Session {
                 history: ConversationHistory::new(),
             }),
             storage_policy: self.root_conversation.storage_policy.clone(),
-            mcp_view: McpView::new_from_manager(&self.mcp_connection_manager),
+            ctx: ConversationContext {
+                base_instructions: self.root_conversation.ctx.base_instructions.clone(),
+                user_instructions: None,
+                mcp_view: McpView::new_from_manager(&self.mcp_connection_manager),
+                tools_prefs: self.root_conversation.ctx.tools_prefs.clone(),
+            },
         });
         if let Ok(mut map) = self.conversations.write() {
             map.insert(id, conv);
@@ -1381,21 +1414,8 @@ async fn submission_loop(
                     .unwrap_or(prev.sandbox_policy.clone());
                 let new_cwd = cwd.clone().unwrap_or_else(|| prev.cwd.clone());
 
-                let tools_config = ToolsConfig::new(
-                    &effective_family,
-                    new_approval_policy,
-                    new_sandbox_policy.clone(),
-                    config.include_plan_tool,
-                    config.include_apply_patch_tool,
-                    config.tools_web_search_request,
-                    config.use_experimental_streamable_shell_tool,
-                );
-
                 let new_turn_context = TurnContext {
                     client,
-                    tools_config,
-                    user_instructions: prev.user_instructions.clone(),
-                    base_instructions: prev.base_instructions.clone(),
                     approval_policy: new_approval_policy,
                     sandbox_policy: new_sandbox_policy.clone(),
                     shell_environment_policy: prev.shell_environment_policy.clone(),
@@ -1471,17 +1491,6 @@ async fn submission_loop(
 
                     let fresh_turn_context = TurnContext {
                         client,
-                        tools_config: ToolsConfig::new(
-                            &model_family,
-                            approval_policy,
-                            sandbox_policy.clone(),
-                            config.include_plan_tool,
-                            config.include_apply_patch_tool,
-                            config.tools_web_search_request,
-                            config.use_experimental_streamable_shell_tool,
-                        ),
-                        user_instructions: turn_context.user_instructions.clone(),
-                        base_instructions: turn_context.base_instructions.clone(),
                         approval_policy,
                         sandbox_policy,
                         shell_environment_policy: turn_context.shell_environment_policy.clone(),
@@ -1903,13 +1912,25 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
-    let tools = get_openai_tools(&turn_context.tools_config, Some(conv.mcp_view.list_tools()));
+    // Assemble tool configuration from conversation preferences and current policies/model.
+    let model_family = turn_context.client.get_model_family();
+    let prefs = &conv.ctx.tools_prefs;
+    let tools_config = ToolsConfig::new(
+        &model_family,
+        turn_context.approval_policy,
+        turn_context.sandbox_policy.clone(),
+        prefs.include_plan_tool,
+        prefs.include_apply_patch_tool,
+        prefs.web_search_request,
+        prefs.use_streamable_shell_tool,
+    );
+    let tools = get_openai_tools(&tools_config, Some(conv.ctx.mcp_view.list_tools()));
 
     let prompt = Prompt {
         input,
         store: turn_context.storage_policy.upstream_store_enabled(),
         tools,
-        base_instructions_override: turn_context.base_instructions.clone(),
+        base_instructions_override: conv.ctx.base_instructions.clone(),
     };
 
     let mut retries = 0;

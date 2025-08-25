@@ -136,6 +136,13 @@ pub struct NewConversationParams {
     /// The set of instructions to use instead of the default ones.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_instructions: Option<String>,
+    /// Optional user instructions to seed the conversation (recorded as the first user message).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_instructions: Option<String>,
+    /// Optional per‑conversation allowlist of MCP tools visible to the model.
+    /// Elements may be provided as "server__tool" (preferred) or "server/tool" (deprecated; will be normalized).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_tool_allowlist: Option<Vec<String>>,
 
     /// Whether to include the plan tool in the conversation.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -144,6 +151,9 @@ pub struct NewConversationParams {
     /// Whether to include the apply patch tool in the conversation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_apply_patch_tool: Option<bool>,
+    /// Whether to include a web_search request tool in the conversation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools_web_search_request: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
@@ -401,8 +411,11 @@ mod tests {
                 sandbox: None,
                 config: None,
                 base_instructions: None,
+                user_instructions: None,
+                mcp_tool_allowlist: None,
                 include_plan_tool: None,
                 include_apply_patch_tool: None,
+                tools_web_search_request: None,
             },
         };
         assert_eq!(
