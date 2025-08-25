@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use async_channel::Receiver;
 use async_channel::Sender;
+use chrono;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
@@ -292,6 +293,7 @@ struct Conversation {
     state: Mutex<ConversationState>,
     storage_policy: StoragePolicy,
     ctx: ConversationContext,
+    last_active_at: Mutex<std::time::SystemTime>,
 }
 
 struct TaskRegistry {
@@ -638,6 +640,7 @@ impl Session {
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                 },
             },
+            last_active_at: Mutex::new(std::time::SystemTime::now()),
         });
         if let Some(restored_items) = restored_items {
             root_conversation
@@ -758,6 +761,7 @@ impl Session {
                 mcp_view: McpView::new_from_manager(&self.mcp_connection_manager),
                 tools_prefs: self.root_conversation.ctx.tools_prefs.clone(),
             },
+            last_active_at: Mutex::new(std::time::SystemTime::now()),
         });
         if let Ok(mut map) = self.conversations.write() {
             map.insert(id, conv);
@@ -909,6 +913,7 @@ impl Session {
 
         // Record to in-memory history for prompt construction.
         conv.state.lock_unchecked().history.record_items(items);
+        *conv.last_active_at.lock_unchecked() = std::time::SystemTime::now();
     }
 
     async fn record_state_snapshot(&self, items: &[ResponseItem]) {
@@ -1226,6 +1231,7 @@ impl Drop for Session {
         self.interrupt_task();
     }
 }
+impl Session {}
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExecCommandContext {
@@ -2512,6 +2518,215 @@ async fn handle_function_call(
     call_id: String,
 ) -> ResponseInputItem {
     match name.as_str() {
+        "conv.list" => {
+            // Collect conversations
+            #[derive(Serialize)]
+            struct ConvEntry {
+                id: String,
+                message_count: usize,
+                last_active_at: String,
+            }
+            #[derive(Serialize)]
+            struct ListPayload {
+                conversations: Vec<ConvEntry>,
+            }
+            let mut entries = Vec::new();
+            // Helper to build entry
+            let mut push_entry = |c: &Arc<Conversation>| {
+                let items = c.state.lock_unchecked().history.contents();
+                let msg_count = items
+                    .iter()
+                    .filter(|it| matches!(it, ResponseItem::Message { .. }))
+                    .count();
+                let ts = *c.last_active_at.lock_unchecked();
+                let dt: chrono::DateTime<chrono::Utc> = chrono::DateTime::<chrono::Utc>::from(ts);
+                entries.push(ConvEntry {
+                    id: c.id.to_string(),
+                    message_count: msg_count,
+                    last_active_at: dt.to_rfc3339(),
+                });
+            };
+            push_entry(&sess.root_conversation);
+            if let Ok(map) = sess.conversations.read() {
+                for (id, c) in map.iter() {
+                    if *id != sess.root_conversation_id() {
+                        push_entry(c);
+                    }
+                }
+            }
+            let payload = ListPayload {
+                conversations: entries,
+            };
+            let content = serde_json::to_string(&payload)
+                .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content,
+                    success: Some(true),
+                },
+            }
+        }
+        "conv.history" => {
+            #[derive(serde::Deserialize)]
+            struct Args {
+                conversation_id: String,
+                #[serde(default)]
+                limit: Option<usize>,
+            }
+            #[derive(Serialize)]
+            struct Attachment {
+                r#type: String,
+                image_url: String,
+            }
+            #[derive(Serialize)]
+            struct Entry {
+                role: String,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                text: Option<String>,
+                #[serde(skip_serializing_if = "Vec::is_empty")]
+                attachments: Vec<Attachment>,
+            }
+            #[derive(Serialize)]
+            struct HistoryPayload {
+                entries: Vec<Entry>,
+            }
+            let args: Args = match serde_json::from_str(&arguments) {
+                Ok(a) => a,
+                Err(e) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to parse arguments: {e}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+            let Ok(id) = Uuid::parse_str(&args.conversation_id) else {
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: "{\"ok\":false,\"reason\":\"conversation not found\"}".to_string(),
+                        success: Some(false),
+                    },
+                };
+            };
+            let target_opt = if id == sess.root_conversation_id() {
+                Some(sess.root_conversation.clone())
+            } else {
+                sess.conversations
+                    .read()
+                    .ok()
+                    .and_then(|m| m.get(&id).cloned())
+            };
+            let Some(target) = target_opt else {
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: "{\"ok\":false,\"reason\":\"conversation not found\"}".to_string(),
+                        success: Some(false),
+                    },
+                };
+            };
+            let mut messages: Vec<ResponseItem> = target
+                .state
+                .lock_unchecked()
+                .history
+                .contents()
+                .into_iter()
+                .filter(|it| matches!(it, ResponseItem::Message { .. }))
+                .collect();
+            if let Some(limit) = args.limit
+                && messages.len() > limit {
+                    messages = messages.split_off(messages.len() - limit);
+                }
+            let mut entries = Vec::new();
+            for msg in messages {
+                if let ResponseItem::Message { role, content, .. } = msg {
+                    let mut text_acc: Vec<String> = Vec::new();
+                    let mut attachments = Vec::new();
+                    for ci in content {
+                        match ci {
+                            ContentItem::OutputText { text } | ContentItem::InputText { text } => {
+                                text_acc.push(text);
+                            }
+                            ContentItem::InputImage { image_url } => {
+                                attachments.push(Attachment {
+                                    r#type: "image".into(),
+                                    image_url,
+                                });
+                            }
+                        }
+                    }
+                    let text = if text_acc.is_empty() {
+                        None
+                    } else {
+                        Some(text_acc.join(""))
+                    };
+                    entries.push(Entry {
+                        role,
+                        text,
+                        attachments,
+                    });
+                }
+            }
+            let payload = HistoryPayload { entries };
+            let content = serde_json::to_string(&payload)
+                .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content,
+                    success: Some(true),
+                },
+            }
+        }
+        "conv.destroy" => {
+            #[derive(serde::Deserialize)]
+            struct Args {
+                conversation_id: String,
+            }
+            let args: Args = match serde_json::from_str(&arguments) {
+                Ok(a) => a,
+                Err(e) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to parse arguments: {e}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+            let Ok(id) = Uuid::parse_str(&args.conversation_id) else {
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: "{\"ok\":false,\"reason\":\"conversation not found\"}".to_string(),
+                        success: Some(false),
+                    },
+                };
+            };
+            if id == sess.root_conversation_id() {
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: "{\"ok\":false,\"reason\":\"cannot destroy root conversation\"}"
+                            .to_string(),
+                        success: Some(false),
+                    },
+                };
+            }
+            sess.close_conversation(id);
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: "{\"ok\":true}".to_string(),
+                    success: Some(true),
+                },
+            }
+        }
         "container.exec" | "shell" => {
             let params = match parse_container_exec_arguments(arguments, turn_context, &call_id) {
                 Ok(params) => params,

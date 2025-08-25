@@ -490,8 +490,206 @@ pub(crate) fn get_openai_tools(
     mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
 ) -> Vec<OpenAiTool> {
     // 1) Built‑ins in a fixed, deterministic order
-    //    shell/local_shell -> update_plan (optional) -> apply_patch (optional)
+    //    conv.* -> shell/local_shell -> update_plan (optional) -> apply_patch (optional)
     let mut tools: Vec<OpenAiTool> = Vec::new();
+    // Conversation tools: fixed order
+    // conv.create
+    {
+        let mut properties = BTreeMap::new();
+        properties.insert(
+            "base_instruction_text".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Inline base instructions text override for the new conversation".to_string(),
+                ),
+            },
+        );
+        properties.insert(
+            "base_instruction_file".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Path to a file containing base instructions (relative to cwd)".to_string(),
+                ),
+            },
+        );
+        properties.insert(
+            "user_instruction".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional initial user instruction to seed the conversation".to_string(),
+                ),
+            },
+        );
+        // items: lightweight multi‑modal, schema as generic object array to remain permissive
+        properties.insert(
+            "items".to_string(),
+            JsonSchema::Array {
+                items: Box::new(JsonSchema::Object {
+                    properties: BTreeMap::new(),
+                    required: None,
+                    additional_properties: Some(true),
+                }),
+                description: Some("Optional multi‑modal initial input items".to_string()),
+            },
+        );
+        properties.insert(
+            "mcp_allowlist".to_string(),
+            JsonSchema::Array {
+                items: Box::new(JsonSchema::String { description: None }),
+                description: Some(
+                    "Optional list of fully‑qualified MCP tools to allow (e.g. server__tool)"
+                        .to_string(),
+                ),
+            },
+        );
+        // internal_tools toggles
+        let mut internal_tools_props = BTreeMap::new();
+        internal_tools_props.insert(
+            "include_plan_tool".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "Whether to include the plan tool in this conversation".to_string(),
+                ),
+            },
+        );
+        internal_tools_props.insert(
+            "include_apply_patch_tool".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "Whether to include the apply_patch tool in this conversation".to_string(),
+                ),
+            },
+        );
+        internal_tools_props.insert(
+            "web_search_request".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "Whether to include the web_search request tool in this conversation"
+                        .to_string(),
+                ),
+            },
+        );
+        internal_tools_props.insert(
+            "use_streamable_shell_tool".to_string(),
+            JsonSchema::Boolean {
+                description: Some("Use streamable shell tool when available".to_string()),
+            },
+        );
+        properties.insert(
+            "internal_tools".to_string(),
+            JsonSchema::Object {
+                properties: internal_tools_props,
+                required: None,
+                additional_properties: Some(false),
+            },
+        );
+        tools.push(OpenAiTool::Function(ResponsesApiTool {
+            name: "conv.create".to_string(),
+            description: "Create a new conversation (interrupts current task); schedules target conversation task then resumes original with tool output".to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties,
+                required: None,
+                additional_properties: Some(false),
+            },
+        }));
+    }
+    // conv.send
+    {
+        let mut properties = BTreeMap::new();
+        properties.insert(
+            "conversation_id".to_string(),
+            JsonSchema::String {
+                description: Some("Target conversation id (uuid)".to_string()),
+            },
+        );
+        properties.insert(
+            "text".to_string(),
+            JsonSchema::String {
+                description: Some("Text to send".to_string()),
+            },
+        );
+        properties.insert(
+            "items".to_string(),
+            JsonSchema::Array {
+                items: Box::new(JsonSchema::Object {
+                    properties: BTreeMap::new(),
+                    required: None,
+                    additional_properties: Some(true),
+                }),
+                description: Some("Optional multi‑modal items to send".to_string()),
+            },
+        );
+        tools.push(OpenAiTool::Function(ResponsesApiTool {
+            name: "conv.send".to_string(),
+            description: "Send a message to an existing conversation (interrupts current task); schedules target conversation task then resumes original with tool output".to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties,
+                required: Some(vec!["conversation_id".to_string()]),
+                additional_properties: Some(false),
+            },
+        }));
+    }
+    // conv.list
+    tools.push(OpenAiTool::Function(ResponsesApiTool {
+        name: "conv.list".to_string(),
+        description: "List all conversations in the current session (non‑interrupting)".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: Some(false),
+        },
+    }));
+    // conv.history
+    {
+        let mut properties = BTreeMap::new();
+        properties.insert(
+            "conversation_id".to_string(),
+            JsonSchema::String {
+                description: Some("Conversation id (uuid)".to_string()),
+            },
+        );
+        properties.insert(
+            "limit".to_string(),
+            JsonSchema::Number {
+                description: Some("Optional limit of messages returned".to_string()),
+            },
+        );
+        tools.push(OpenAiTool::Function(ResponsesApiTool {
+            name: "conv.history".to_string(),
+            description: "Return message history for a conversation (non‑interrupting)".to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties,
+                required: Some(vec!["conversation_id".to_string()]),
+                additional_properties: Some(false),
+            },
+        }));
+    }
+    // conv.destroy
+    {
+        let mut properties = BTreeMap::new();
+        properties.insert(
+            "conversation_id".to_string(),
+            JsonSchema::String {
+                description: Some("Conversation id (uuid) to destroy".to_string()),
+            },
+        );
+        tools.push(OpenAiTool::Function(ResponsesApiTool {
+            name: "conv.destroy".to_string(),
+            description:
+                "Destroy a conversation (non‑interrupting; cannot destroy the root conversation)"
+                    .to_string(),
+            strict: false,
+            parameters: JsonSchema::Object {
+                properties,
+                required: Some(vec!["conversation_id".to_string()]),
+                additional_properties: Some(false),
+            },
+        }));
+    }
 
     match &config.shell_type {
         ConfigShellToolType::DefaultShell => tools.push(create_shell_tool()),
@@ -619,7 +817,19 @@ mod tests {
         );
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
-        assert_eq_tool_names(&tools, &["local_shell", "update_plan", "web_search"]);
+        assert_eq_tool_names(
+            &tools,
+            &[
+                "conv.create",
+                "conv.send",
+                "conv.list",
+                "conv.history",
+                "conv.destroy",
+                "local_shell",
+                "update_plan",
+                "web_search",
+            ],
+        );
     }
 
     #[test]
@@ -636,7 +846,19 @@ mod tests {
         );
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
-        assert_eq_tool_names(&tools, &["shell", "update_plan", "web_search"]);
+        assert_eq_tool_names(
+            &tools,
+            &[
+                "conv.create",
+                "conv.send",
+                "conv.list",
+                "conv.history",
+                "conv.destroy",
+                "shell",
+                "update_plan",
+                "web_search",
+            ],
+        );
     }
 
     #[test]
@@ -691,11 +913,20 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &["shell", "web_search", "test_server/do_something_cool"],
+            &[
+                "conv.create",
+                "conv.send",
+                "conv.list",
+                "conv.history",
+                "conv.destroy",
+                "shell",
+                "web_search",
+                "test_server/do_something_cool",
+            ],
         );
 
         assert_eq!(
-            tools[2],
+            tools[7],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {
@@ -774,10 +1005,22 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search", "dash/search"]);
+        assert_eq_tool_names(
+            &tools,
+            &[
+                "conv.create",
+                "conv.send",
+                "conv.list",
+                "conv.history",
+                "conv.destroy",
+                "shell",
+                "web_search",
+                "dash/search",
+            ],
+        );
 
         assert_eq!(
-            tools[2],
+            tools[7],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/search".to_string(),
                 parameters: JsonSchema::Object {
@@ -830,9 +1073,21 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search", "dash/paginate"]);
+        assert_eq_tool_names(
+            &tools,
+            &[
+                "conv.create",
+                "conv.send",
+                "conv.list",
+                "conv.history",
+                "conv.destroy",
+                "shell",
+                "web_search",
+                "dash/paginate",
+            ],
+        );
         assert_eq!(
-            tools[2],
+            tools[7],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/paginate".to_string(),
                 parameters: JsonSchema::Object {
@@ -883,9 +1138,21 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search", "dash/tags"]);
+        assert_eq_tool_names(
+            &tools,
+            &[
+                "conv.create",
+                "conv.send",
+                "conv.list",
+                "conv.history",
+                "conv.destroy",
+                "shell",
+                "web_search",
+                "dash/tags",
+            ],
+        );
         assert_eq!(
-            tools[2],
+            tools[7],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/tags".to_string(),
                 parameters: JsonSchema::Object {
@@ -939,9 +1206,21 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search", "dash/value"]);
+        assert_eq_tool_names(
+            &tools,
+            &[
+                "conv.create",
+                "conv.send",
+                "conv.list",
+                "conv.history",
+                "conv.destroy",
+                "shell",
+                "web_search",
+                "dash/value",
+            ],
+        );
         assert_eq!(
-            tools[2],
+            tools[7],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/value".to_string(),
                 parameters: JsonSchema::Object {
