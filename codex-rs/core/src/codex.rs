@@ -101,8 +101,8 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
-use crate::protocol::TurnDiffEvent;
 use crate::protocol::TokenUsage;
+use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
@@ -2166,9 +2166,10 @@ async fn try_run_turn(
                     {
                         let mut st = conv.state.lock_unchecked();
                         if st.baseline_used_tokens.is_none()
-                            && let Some(cached) = token_usage.cached_input_tokens {
-                                st.baseline_used_tokens = Some(cached);
-                            }
+                            && let Some(cached) = token_usage.cached_input_tokens
+                        {
+                            st.baseline_used_tokens = Some(cached);
+                        }
                     }
 
                     // Forward token usage to clients.
