@@ -102,6 +102,7 @@ use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnDiffEvent;
+use crate::protocol::TokenUsage;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
@@ -267,6 +268,8 @@ struct State {
 struct ConversationState {
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
+    /// Baseline used tokens (e.g., system + tool instructions), derived from first turn's cached_input_tokens.
+    baseline_used_tokens: Option<u64>,
 }
 #[derive(Debug, Clone)]
 struct ToolsPrefs {
@@ -621,6 +624,7 @@ impl Session {
             state: Mutex::new(ConversationState {
                 pending_input: Vec::new(),
                 history: ConversationHistory::new(),
+                baseline_used_tokens: None,
             }),
             storage_policy: turn_context.storage_policy.clone(),
             ctx: ConversationContext {
@@ -745,6 +749,7 @@ impl Session {
             state: Mutex::new(ConversationState {
                 pending_input: Vec::new(),
                 history: ConversationHistory::new(),
+                baseline_used_tokens: None,
             }),
             storage_policy: self.root_conversation.storage_policy.clone(),
             ctx: ConversationContext {
@@ -1719,6 +1724,19 @@ async fn run_task(
     let mut turn_diff_tracker = TurnDiffTracker::new();
 
     loop {
+        // Pre-turn auto-compact check before consuming pending input.
+        if let Err(e) = ensure_auto_compact_pre_turn(&sess, &conv, turn_context, &sub_id).await {
+            // Surface error but continue.
+            sess.send_event(Event {
+                id: sub_id.clone(),
+                conversation_id: Some(conv.id),
+                task_id: Some(task_id),
+                msg: EventMsg::Error(ErrorEvent {
+                    message: format!("auto-compact pre-turn failed: {e}"),
+                }),
+            })
+            .await;
+        }
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
@@ -1760,7 +1778,7 @@ async fn run_task(
         )
         .await
         {
-            Ok(turn_output) => {
+            Ok((turn_output, last_usage)) => {
                 let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
                 let mut responses = Vec::<ResponseInputItem>::new();
                 for processed_response_item in turn_output {
@@ -1863,6 +1881,27 @@ async fn run_task(
                     .await;
                 }
 
+                // Post-turn auto-compact check using last token usage (if available).
+                if let Err(e) = ensure_auto_compact_post_turn(
+                    &sess,
+                    &conv,
+                    turn_context,
+                    &sub_id,
+                    last_usage.as_ref(),
+                )
+                .await
+                {
+                    sess.send_event(Event {
+                        id: sub_id.clone(),
+                        conversation_id: Some(conv.id),
+                        task_id: Some(task_id),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: format!("auto-compact post-turn failed: {e}"),
+                        }),
+                    })
+                    .await;
+                }
+
                 if responses.is_empty() {
                     debug!("Turn completed");
                     last_agent_message = get_last_assistant_message_from_turn(
@@ -1911,7 +1950,10 @@ async fn run_turn(
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: String,
     input: Vec<ResponseItem>,
-) -> CodexResult<Vec<ProcessedResponseItem>> {
+) -> CodexResult<(
+    Vec<ProcessedResponseItem>,
+    Option<crate::protocol::TokenUsage>,
+)> {
     // Assemble tool configuration from conversation preferences and current policies/model.
     let model_family = turn_context.client.get_model_family();
     let prefs = &conv.ctx.tools_prefs;
@@ -1945,7 +1987,7 @@ async fn run_turn(
         )
         .await
         {
-            Ok(output) => return Ok(output),
+            Ok((output, usage)) => return Ok((output, usage)),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
             Err(e @ (CodexErr::UsageLimitReached(_) | CodexErr::UsageNotIncluded)) => {
@@ -2002,7 +2044,10 @@ async fn try_run_turn(
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: &str,
     prompt: &Prompt,
-) -> CodexResult<Vec<ProcessedResponseItem>> {
+) -> CodexResult<(
+    Vec<ProcessedResponseItem>,
+    Option<crate::protocol::TokenUsage>,
+)> {
     // call_ids that are part of this response.
     let completed_call_ids = prompt
         .input
@@ -2061,6 +2106,7 @@ async fn try_run_turn(
     let mut stream = turn_context.client.clone().stream(&prompt).await?;
 
     let mut output = Vec::new();
+    let mut last_token_usage: Option<crate::protocol::TokenUsage> = None;
 
     loop {
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
@@ -2116,15 +2162,26 @@ async fn try_run_turn(
                 token_usage,
             } => {
                 if let Some(token_usage) = token_usage {
+                    // Update baseline used tokens if not set yet (prefer first turn cached tokens).
+                    {
+                        let mut st = conv.state.lock_unchecked();
+                        if st.baseline_used_tokens.is_none()
+                            && let Some(cached) = token_usage.cached_input_tokens {
+                                st.baseline_used_tokens = Some(cached);
+                            }
+                    }
+
+                    // Forward token usage to clients.
                     sess.tx_event
                         .send(Event {
                             id: sub_id.to_string(),
                             conversation_id: Some(conv.id),
                             task_id: sess.current_task_id(),
-                            msg: EventMsg::TokenCount(token_usage),
+                            msg: EventMsg::TokenCount(token_usage.clone()),
                         })
                         .await
                         .ok();
+                    last_token_usage = Some(token_usage);
                 }
 
                 let unified_diff = turn_diff_tracker.get_unified_diff();
@@ -2139,7 +2196,7 @@ async fn try_run_turn(
                     let _ = sess.tx_event.send(event).await;
                 }
 
-                return Ok(output);
+                return Ok((output, last_token_usage));
             }
             ResponseEvent::OutputTextDelta(delta) => {
                 {
@@ -3277,6 +3334,188 @@ async fn drain_to_completed(
             Err(e) => return Err(e),
         }
     }
+}
+
+/// Variant of drain_to_completed that records items into the specified conversation.
+async fn drain_to_completed_for_conv(
+    sess: &Session,
+    conv: &Arc<Conversation>,
+    turn_context: &TurnContext,
+    sub_id: &str,
+    prompt: &Prompt,
+) -> CodexResult<()> {
+    let mut stream = turn_context.client.clone().stream(prompt).await?;
+    loop {
+        let maybe_event = stream.next().await;
+        let Some(event) = maybe_event else {
+            return Err(CodexErr::Stream(
+                "stream closed before response.completed".into(),
+                None,
+            ));
+        };
+        match event {
+            Ok(ResponseEvent::OutputItemDone(item)) => {
+                // Record only to in-memory conversation history; avoid state snapshot.
+                conv.state
+                    .lock_unchecked()
+                    .history
+                    .record_items(std::slice::from_ref(&item));
+            }
+            Ok(ResponseEvent::Completed {
+                response_id: _,
+                token_usage,
+            }) => {
+                if let Some(token_usage) = token_usage {
+                    sess.tx_event
+                        .send(Event {
+                            id: sub_id.to_string(),
+                            conversation_id: Some(conv.id),
+                            task_id: sess.current_task_id(),
+                            msg: EventMsg::TokenCount(token_usage),
+                        })
+                        .await
+                        .ok();
+                }
+                return Ok(());
+            }
+            Ok(_) => continue,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Ensure auto-compact pre-turn if estimated remaining context is below threshold.
+async fn ensure_auto_compact_pre_turn(
+    sess: &Session,
+    conv: &Arc<Conversation>,
+    turn_context: &TurnContext,
+    sub_id: &str,
+) -> CodexResult<()> {
+    // Guard: feature disabled or unknown context window.
+    if !turn_context.client.get_auto_compact_enabled() {
+        return Ok(());
+    }
+    let Some(context_window) = turn_context.client.get_model_context_window() else {
+        return Ok(());
+    };
+
+    let threshold = turn_context.client.get_auto_compact_threshold_percent();
+    // Estimate used tokens from conversation history (approx) and compute remaining %.
+    let (used_estimate, baseline) = {
+        let st = conv.state.lock_unchecked();
+        (
+            st.history.approx_total_tokens() as u64,
+            st.baseline_used_tokens.unwrap_or(0),
+        )
+    };
+    if context_window == 0 {
+        return Ok(());
+    }
+    let usage = TokenUsage {
+        input_tokens: used_estimate,
+        cached_input_tokens: None,
+        output_tokens: 0,
+        reasoning_output_tokens: None,
+        total_tokens: used_estimate,
+    };
+    let remaining = usage.percent_of_context_window_remaining(context_window, baseline);
+    if remaining <= threshold {
+        // Notify lightly and inline-compact.
+        sess.notify_background_event_for(sub_id, conv.id, "自动 compact 已触发")
+            .await;
+        inline_compact(sess, conv, turn_context, sub_id).await?;
+    }
+    Ok(())
+}
+
+/// Ensure auto-compact post-turn if precise remaining context is below threshold.
+async fn ensure_auto_compact_post_turn(
+    sess: &Session,
+    conv: &Arc<Conversation>,
+    turn_context: &TurnContext,
+    sub_id: &str,
+    last_usage: Option<&TokenUsage>,
+) -> CodexResult<()> {
+    if !turn_context.client.get_auto_compact_enabled() {
+        return Ok(());
+    }
+    let Some(context_window) = turn_context.client.get_model_context_window() else {
+        return Ok(());
+    };
+    let Some(usage) = last_usage.cloned() else {
+        return Ok(());
+    };
+    let baseline = {
+        let st = conv.state.lock_unchecked();
+        st.baseline_used_tokens.unwrap_or(0)
+    };
+    let remaining = usage.percent_of_context_window_remaining(context_window, baseline);
+    if remaining <= turn_context.client.get_auto_compact_threshold_percent() {
+        sess.notify_background_event_for(sub_id, conv.id, "自动 compact 已触发")
+            .await;
+        inline_compact(sess, conv, turn_context, sub_id).await?;
+    }
+    Ok(())
+}
+
+/// Inline compact implementation: run summarization with compact prompt and prune history to last assistant message.
+async fn inline_compact(
+    sess: &Session,
+    conv: &Arc<Conversation>,
+    turn_context: &TurnContext,
+    sub_id: &str,
+) -> CodexResult<()> {
+    const SUMMARIZATION_PROMPT: &str = include_str!("prompt_for_compact_command.md");
+    let turn_input: Vec<ResponseItem> = sess.turn_input_with_history_for(conv, vec![]);
+    let prompt = Prompt {
+        input: turn_input,
+        store: turn_context.storage_policy.upstream_store_enabled(),
+        tools: Vec::new(),
+        base_instructions_override: Some(SUMMARIZATION_PROMPT.to_string()),
+    };
+
+    let max_retries = turn_context.client.get_provider().stream_max_retries();
+    let mut retries = 0;
+    loop {
+        let attempt_result =
+            drain_to_completed_for_conv(sess, conv, turn_context, sub_id, &prompt).await;
+        match attempt_result {
+            Ok(()) => break,
+            Err(CodexErr::Interrupted) => return Ok(()),
+            Err(e) => {
+                if retries < max_retries {
+                    retries += 1;
+                    let delay = backoff(retries);
+                    sess.notify_background_event_for(
+                        sub_id,
+                        conv.id,
+                        format!(
+                            "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
+                        ),
+                    )
+                    .await;
+                    tokio::time::sleep(delay).await;
+                    continue;
+                } else {
+                    // Surface error and stop inline compact
+                    sess.send_event(Event {
+                        id: sub_id.to_string(),
+                        conversation_id: Some(conv.id),
+                        task_id: sess.current_task_id(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: e.to_string(),
+                        }),
+                    })
+                    .await;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Prune history to only the last assistant message (summary).
+    conv.state.lock_unchecked().history.keep_last_messages(1);
+    Ok(())
 }
 
 fn convert_call_tool_result_to_function_call_output_payload(

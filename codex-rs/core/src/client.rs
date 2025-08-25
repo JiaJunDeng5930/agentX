@@ -372,6 +372,23 @@ impl ModelClient {
     pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
     }
+
+    /// Returns the configured model context window, if known.
+    pub fn get_model_context_window(&self) -> Option<u64> {
+        self.config.model_context_window
+    }
+
+    pub fn get_auto_compact_enabled(&self) -> bool {
+        self.config.auto_compact_enabled
+    }
+
+    pub fn get_auto_compact_threshold_percent(&self) -> u8 {
+        self.config.auto_compact_threshold_percent
+    }
+
+    pub fn get_auto_compact_interrupt_mid_turn(&self) -> bool {
+        self.config.auto_compact_interrupt_mid_turn
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]

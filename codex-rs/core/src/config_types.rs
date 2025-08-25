@@ -225,3 +225,14 @@ pub enum Verbosity {
     Medium,
     High,
 }
+
+/// Configuration values for automatic conversation compaction.
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct AutoCompactToml {
+    /// Enable automatic compact (summarize + prune) when context left is under threshold.
+    pub enabled: Option<bool>,
+    /// Trigger threshold as percent of remaining context window.
+    pub threshold_percent: Option<u8>,
+    /// Optional: interrupt an in‑flight turn to compact immediately.
+    pub interrupt_mid_turn: Option<bool>,
+}

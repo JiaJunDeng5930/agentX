@@ -1,4 +1,5 @@
 use crate::config_profile::ConfigProfile;
+use crate::config_types::AutoCompactToml;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
 use crate::config_types::SandboxWorkspaceWrite;
@@ -180,6 +181,13 @@ pub struct Config {
     pub preferred_auth_method: AuthMode,
 
     pub use_experimental_streamable_shell_tool: bool,
+
+    /// Auto-compact: enable automatic inline summarization + prune when context left is low.
+    pub auto_compact_enabled: bool,
+    /// Auto-compact threshold percentage (0-100).
+    pub auto_compact_threshold_percent: u8,
+    /// Optional: interrupt mid-turn to compact (heuristic).
+    pub auto_compact_interrupt_mid_turn: bool,
 }
 
 impl Config {
@@ -487,6 +495,9 @@ pub struct ConfigToml {
 
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
+
+    /// Auto-compact settings.
+    pub auto_compact: Option<AutoCompactToml>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -735,6 +746,14 @@ impl Config {
         let responses_originator_header: String = cfg
             .responses_originator_header_internal_override
             .unwrap_or(DEFAULT_RESPONSES_ORIGINATOR_HEADER.to_owned());
+        // Resolve auto-compact configuration with defaults.
+        let (auto_enabled, auto_threshold, auto_interrupt) = {
+            let ac = cfg.auto_compact.clone().unwrap_or_default();
+            let enabled = ac.enabled.unwrap_or(false);
+            let threshold = ac.threshold_percent.unwrap_or(15);
+            let interrupt = ac.interrupt_mid_turn.unwrap_or(false);
+            (enabled, threshold, interrupt)
+        };
 
         let config = Self {
             model,
@@ -796,6 +815,9 @@ impl Config {
             use_experimental_streamable_shell_tool: cfg
                 .experimental_use_exec_command_tool
                 .unwrap_or(false),
+            auto_compact_enabled: auto_enabled,
+            auto_compact_threshold_percent: auto_threshold,
+            auto_compact_interrupt_mid_turn: auto_interrupt,
         };
         Ok(config)
     }
@@ -1165,6 +1187,9 @@ disable_response_storage = true
                 responses_originator_header: "codex_cli_rs".to_string(),
                 preferred_auth_method: AuthMode::ChatGPT,
                 use_experimental_streamable_shell_tool: false,
+                auto_compact_enabled: false,
+                auto_compact_threshold_percent: 15,
+                auto_compact_interrupt_mid_turn: false,
             },
             o3_profile_config
         );
@@ -1222,6 +1247,9 @@ disable_response_storage = true
             responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
+            auto_compact_enabled: false,
+            auto_compact_threshold_percent: 15,
+            auto_compact_interrupt_mid_turn: false,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1294,6 +1322,9 @@ disable_response_storage = true
             responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
+            auto_compact_enabled: false,
+            auto_compact_threshold_percent: 15,
+            auto_compact_interrupt_mid_turn: false,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

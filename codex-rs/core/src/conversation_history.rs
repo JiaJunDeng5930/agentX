@@ -139,6 +139,12 @@ impl ConversationHistory {
     fn recompute_tokens(&mut self) {
         self.approx_tokens = self.items.iter().map(estimate_tokens).sum();
     }
+
+    /// Approximate total tokens of the current conversation history.
+    /// Uses a rough heuristic (~4 chars/token) consistent with other estimates.
+    pub(crate) fn approx_total_tokens(&self) -> usize {
+        self.approx_tokens
+    }
 }
 
 /// Anything that is not a system message or "reasoning" message is considered
