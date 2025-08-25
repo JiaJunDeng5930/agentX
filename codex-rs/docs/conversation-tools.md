@@ -116,21 +116,26 @@
 ---
 
 ## 数据与结构（核心）
-
+ 
 ### 1) `ConversationContext` 扩展
-
+ 
 - 继续承载：
   - `base_instructions: Option<String>`
   - `user_instructions: Option<String>`
   - `mcp_view: McpView`（开放 `with_allowlist`）
   - `tools_prefs: ToolsPrefs`（可按需扩展）
-
+ 
+### 1.5) `Session` 增强
+- 为精确实现“打断 → 目标 `conversation` → 承接”的顺序，`Session` 新增最小任务计划队列：
+  - `pending_tasks: VecDeque<TaskPlan>`
+  - 该队列由 `submission_loop` 消费；当 `current_task` 完成或被替换后，按 FIFO 启动下一项计划（详见下节“task 调度器（串行执行）”）
+ 
 ### 2) `conversation` 寻址
-
+ 
 - 仅通过 `conversation_id: Uuid` 寻址；不引入 `index` 模式
-
+ 
 ### 3) `task` 调度器（串行执行）
-
+ 
 - 增加 `pending_tasks: VecDeque<TaskPlan>`，确保“一个完成→启动下一个”
 - 消费点：在 `submission_loop` 中消费 `pending_tasks`，当 `current_task` 完成时按 FIFO 启动下一个
 - 提供：
