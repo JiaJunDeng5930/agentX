@@ -31,7 +31,8 @@
 - 参数：
   - `base_instruction_text?: string`
   - `base_instruction_file?: string`（相对路径相对于 `turn_context.cwd`，与上互斥；均未提供则继承当前 `conversation` 的 base）
-  - `user_instruction: string`（必填，作为新 `conversation` 的第一条用户消息）
+  - `user_instruction?: string`（与 `items` 至少一项，作为首轮用户输入之一）
+  - `items?: InputItem[]`（与 `user_instruction` 至少一项，支持多模态首轮输入）
   - `mcp_allowlist?: string[]`（未提供则继承当前 `conversation` 的 `mcp_view`）
   - `internal_tools?: { include_plan_tool?: bool, include_apply_patch_tool?: bool, web_search_request?: bool, use_streamable_shell_tool?: bool }`（未提供则继承当前 `conversation` 的 `tools_prefs`）
 - 行为：
@@ -43,9 +44,10 @@
   - 工具返回值（注入到 T_cont 的 `FunctionCallOutput.content`）为 T_new 的“最后一条助手消息”字符串
   - JSON 负载（字符串形式）：
     {
-    "conversation_id": "<uuid>",
-    "first_user_message": "<string>",
-    "last_assistant_message": "<string>"
+      "conversation_id": "<uuid>",
+      "first_user_message": "<string, optional>",
+      "first_items_count": <number, optional>,
+      "last_assistant_message": "<string>"
     }
 
 2. `conv.send`（打断型）
@@ -67,21 +69,22 @@
     "last_assistant_message": "<string>"
     }
 
-3. `conv.list`（非打断型）
+3) `conv.list`（非打断型）
 
 - 参数：无
 - 行为：读取 `session` 内全部 `conversation`
 - 返回：
-  - JSON 负载：{ "conversations": [ { "id": string, "message_count": number, "last_active_at": string } ] }
+  - JSON 负载：{ "conversations": [ { "id": string, "message_count": number, "last_active_at": "<RFC3339 string>" } ] }
 
-4. `conv.history`（非打断型）
+4) `conv.history`（非打断型）
 
 - 参数：
   - `conversation_id: string`
   - `limit?: number`
-- 行为：返回该 `conversation` 历史中的 `ResponseItem::Message`（仅 role=user/assistant 文本；不含 tool 调用与输出）
+- 行为：返回该 `conversation` 历史中的 `ResponseItem::Message`（不含 tool 调用与输出）
 - 返回：
-  - JSON 负载：{ "entries": [ { "role": "user" | "assistant", "text": "<string>" } ] }
+  - JSON 负载（含轻量多模态）：
+    { "entries": [ { "role": "user" | "assistant", "text": "<string, optional>", "attachments": [ { "type": "image", "image_url": "<data:... or http(s)://...>" } ] } ] }
 
 5. `conv.destroy`（非打断型）
 
@@ -133,6 +136,7 @@
 ### 3) `task` 调度器（串行执行）
 
 - 增加 `pending_tasks: VecDeque<TaskPlan>`，确保“一个完成→启动下一个”
+- 消费点：在 `submission_loop` 中消费 `pending_tasks`，当 `current_task` 完成时按 FIFO 启动下一个
 - 提供：
   - `abort_current_and_enqueue(plans: Vec<TaskPlan>)`
   - `enqueue(plans: Vec<TaskPlan>)`
@@ -141,12 +145,18 @@
   - `input_items: Vec<InputItem>`
   - `base_instructions_override: Option<String>`
   - `closure: Option<{ call_id: String, tool_name: String }>`（承接工具调用闭合信息）
+  - 公平性与上限：可配置 `max_interrupt_chain_depth`，限制连续“打断型工具”的嵌套深度，避免长期饥饿
 
 ### 4) `conversation` 构造与计划生成
 
 - `open_conversation_with(spec)`：从当前 `conversation` 继承并覆盖上下文；记录 `user_instruction` 为首条 message
 - `plan_for_conv_create(spec, call_ctx)` → `[T_new, T_cont]`
 - `plan_for_conv_send(ref, input, call_ctx)` → `[T_target, T_cont]`
+ 
+### 5) `conversation` 元数据
+- 新增并维护 `last_active_at: Instant`：
+  - 在写入历史（record_items）与 `TaskComplete` 时刷新
+  - `conv.list` 对外返回时序列化为 RFC3339 字符串
 
 ---
 
@@ -166,7 +176,7 @@
     - `abort_current_and_enqueue([T_new(user_instruction), T_cont(return=last_assistant_message_of_T_new)])`
     - 返回 JSON（包含 `conversation_id`/`first_user_message`/`last_assistant_message`），`FunctionCallOutput` 在 T_cont 注入
   - `conv.send`：
-    - 解析 `conversation_ref` → `conversation_id`
+    - 解析 `conversation_id`
     - `abort_current_and_enqueue([T_target(text/items), T_cont(return=last_assistant_message_of_T_target)])`
     - 返回 JSON（包含 `conversation_id`/`last_assistant_message`），`FunctionCallOutput` 在 T_cont 注入
   - `conv.list` / `conv.history` / `conv.destroy`：直接读取 / 修改内存并 `FunctionCallOutput` 返回
@@ -174,9 +184,12 @@
 ---
 
 ## 事件策略
-
-- 打断型工具：当前 `task` → `TurnAborted(Replaced)`
-- 后续 `task`（T_new/T_target、T_cont）：`TaskStarted`/`AgentMessageDelta`/`TokenCount`/`TaskComplete`
+ 
+- 打断型工具事件顺序保证：
+  - 原 `conversation`：`TurnAborted(Replaced)`
+  - 目标 `conversation`（T_new/T_target）：`TaskStarted` → `AgentMessageDelta`（可选）→ `TokenCount`（可选）→ `TaskComplete`
+  - 原 `conversation`（T_cont）：`TaskStarted` → `AgentMessageDelta`（可选）→ `TaskComplete`
+- 前端以 `Event.conversation_id` 路由 UI；在替换发生时提示“当前 `task` 被 `conv.*` 替换，正在执行目标 `conversation`…”
 - 非打断工具：仅返回 `FunctionCallOutput`
 
 ---
