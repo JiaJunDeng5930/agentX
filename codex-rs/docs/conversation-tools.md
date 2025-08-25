@@ -43,12 +43,7 @@
 - 返回：
   - 工具返回值（注入到 T_cont 的 `FunctionCallOutput.content`）为 T_new 的“最后一条助手消息”字符串
   - JSON 负载（字符串形式）：
-    {
-      "conversation_id": "<uuid>",
-      "first_user_message": "<string, optional>",
-      "first_items_count": <number, optional>,
-      "last_assistant_message": "<string>"
-    }
+    { "conversation_id": "<uuid>", "last_assistant_message": "<string>" }
 
 2. `conv.send`（打断型）
 
@@ -75,6 +70,7 @@
 - 行为：读取 `session` 内全部 `conversation`
 - 返回：
   - JSON 负载：{ "conversations": [ { "id": string, "message_count": number, "last_active_at": "<RFC3339 string>" } ] }
+  - 统计口径：`message_count` 仅统计 `conversation` 历史中 `ResponseItem::Message` 的条数（包含 user 与 assistant），不计入 tool 调用/输出、reasoning 等其他类型。实现与 `ConversationHistory` 的筛选逻辑保持一致。
 
 4) `conv.history`（非打断型）
 
@@ -172,9 +168,11 @@
 - 新增分支：
   - `conv.create`：
     - 解析 `base_instruction_text` / `base_instruction_file`
+      - 路径解释：`base_instruction_file` 为相对 `turn_context.cwd` 的相对路径或绝对路径
+      - 失败语义：文件不存在/读取失败时，直接返回 `FunctionCallOutput`，其中 `output.success = Some(false)`，`output.content` 为简要摘要（例如 `"failed to read base_instruction_file"`）；不进行任务替换与排队（不启动 T_new/T_cont），避免把失败详情注入模型上下文
     - `open_conversation_with(spec)` → `conversation_id`
     - `abort_current_and_enqueue([T_new(user_instruction), T_cont(return=last_assistant_message_of_T_new)])`
-    - 返回 JSON（包含 `conversation_id`/`first_user_message`/`last_assistant_message`），`FunctionCallOutput` 在 T_cont 注入
+    - 返回 JSON（包含 `conversation_id`/`last_assistant_message`），`FunctionCallOutput` 在 T_cont 注入
   - `conv.send`：
     - 解析 `conversation_id`
     - `abort_current_and_enqueue([T_target(text/items), T_cont(return=last_assistant_message_of_T_target)])`
@@ -198,6 +196,7 @@
 
 - `conversation` 不存在 / 编号无效：{ ok: false, reason: "conversation not found" } 或 `success: false`
 - 读取 `base_instruction_file` 失败：`success: false`
+- 失败返回注入约束：对于 `conv.create` 参数预处理阶段的失败（如文件读取失败），直接返回失败；不要替换当前 `task`，也不要启动后续计划（T_new/T_cont），并避免在模型上下文注入冗长失败详情（仅返回简要摘要）
 - `conv.send` 参数校验：`text` 与 `items` 至少一项
 - 禁止销毁 root `conversation`
 
@@ -213,11 +212,23 @@
 ## 返回值与模型交互
 
 - 所有工具的 `FunctionCallOutputPayload.content` 使用 JSON 字符串：
-  - `conv.create`：主字段 `last_assistant_message`（返回值）；附带 `conversation_id`、`first_user_message`
+  - `conv.create`：主字段 `last_assistant_message`（返回值）；附带 `conversation_id`
   - `conv.send`：主字段 `last_assistant_message`；附带 `conversation_id`
   - `conv.list`：`conversations`
   - `conv.history`：`entries`
   - `conv.destroy`：`{ ok }`、`reason?`
+  - 失败时设置 `success: Some(false)` 并提供简要摘要（如 `"failed to read base_instruction_file"`）
+ 
+---
+ 
+## internal_tools → ToolsConfig 映射
+ 
+- `internal_tools` 字段映射到 `ToolsConfig::new` 的参数：
+  - `include_plan_tool`
+  - `include_apply_patch_tool`
+  - `web_search_request`
+  - `use_streamable_shell_tool`
+- 注意：`apply_patch` 的最终形态受 `model_family.apply_patch_tool_type` 约束（可能强制为 `Freeform` 或 `Function`）；即便 `internal_tools` 启用，也会被 `model_family` 的配置覆盖到特定实现形态。
 
 ---
 
