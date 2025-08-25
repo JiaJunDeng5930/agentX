@@ -29,7 +29,7 @@ use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 use serde_bytes::ByteBuf;
 
-const DEFAULT_TIMEOUT_MS: u64 = 10_000;
+const DEFAULT_TIMEOUT_MS: u64 = 3_600_000;
 
 // Hardcode these since it does not seem worth including the libc crate just
 // for these.
