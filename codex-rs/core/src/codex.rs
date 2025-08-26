@@ -4364,11 +4364,10 @@ mod tests {
 #[cfg(test)]
 mod conv_tools_tests {
     use super::*;
-    
+
     use codex_login::AuthManager;
     use tempfile::TempDir;
-    
-    
+
     async fn make_session() -> (Arc<Session>, TurnContext, Arc<Conversation>) {
         let (tx_event, _rx_event) = async_channel::bounded::<Event>(64);
         let provider = crate::model_provider_info::built_in_model_providers()

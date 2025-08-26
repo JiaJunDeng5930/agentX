@@ -26,7 +26,7 @@
 
 内置 5 个工具，默认始终随模型工具集暴露（与 `shell`、`apply_patch` 同级），在 `core/src/openai_tools.rs#get_openai_tools()` 中以固定顺序加入。
 
-1. `conv.create`（打断型）
+1. `conv_create`（打断型）
 
 - 参数：
   - `base_instruction_text?: string`
@@ -45,7 +45,7 @@
   - JSON 负载（字符串形式）：
     { "conversation_id": "<uuid>", "last_assistant_message": "<string>" }
 
-2. `conv.send`（打断型）
+2. `conv_send`（打断型）
 
 - 参数：
   - `conversation_id: string`
@@ -64,7 +64,7 @@
     "last_assistant_message": "<string>"
     }
 
-3) `conv.list`（非打断型）
+3) `conv_list`（非打断型）
 
 - 参数：无
 - 行为：读取 `session` 内全部 `conversation`
@@ -72,7 +72,7 @@
   - JSON 负载：{ "conversations": [ { "id": string, "message_count": number, "last_active_at": "<RFC3339 string>" } ] }
   - 统计口径：`message_count` 仅统计 `conversation` 历史中 `ResponseItem::Message` 的条数（包含 user 与 assistant），不计入 tool 调用/输出、reasoning 等其他类型。实现与 `ConversationHistory` 的筛选逻辑保持一致。
 
-4) `conv.history`（非打断型）
+4) `conv_history`（非打断型）
 
 - 参数：
   - `conversation_id: string`
@@ -82,7 +82,7 @@
   - JSON 负载（含轻量多模态）：
     { "entries": [ { "role": "user" | "assistant", "text": "<string, optional>", "attachments": [ { "type": "image", "image_url": "<data:... or http(s)://...>" } ] } ] }
 
-5. `conv.destroy`（非打断型）
+5. `conv_destroy`（非打断型）
 
 - 参数：
   - `conversation_id: string`
@@ -96,12 +96,12 @@
 ## 执行语义（打断与串行调度）
 
 串行调度规则：任意时刻最多只有一个 `task` 在运行；新 `task` 启动前，前一个必须已结束。
-当 `conv.create` / `conv.send` 被调用：
+当 `conv_create` / `conv_send` 被调用：
 
 1. 当前运行的 `task` → `TurnAborted(Replaced)`
 2. 调度器立即启动 T_new/T_target（目标 `conversation`），运行至完成（期间可产生 `TaskStarted`、`AgentMessageDelta`、`TokenCount`、`TaskComplete` 等事件）
 3. 紧接启动 T_cont（原 `conversation`），向模型注入本工具的 `FunctionCallOutput`
-   当 `conv.list` / `conv.history` / `conv.destroy` 被调用：
+  当 `conv_list` / `conv_history` / `conv_destroy` 被调用：
 
 - 不打断当前 `task`；直接返回 `FunctionCallOutput`
 
@@ -109,8 +109,8 @@
 
 ## 承接策略（工具返回值如何交回模型）
 
-- 对于 `conv.create`：T_cont 注入 `ResponseInputItem::FunctionCallOutput { call_id, output }`，其中 `output.content` 为 T_new 的“最后一条助手消息”
-- 对于 `conv.send`：T_cont 注入 `ResponseInputItem::FunctionCallOutput { call_id, output }`，其中 `output.content` 为 T_target 的“最后一条助手消息”
+- 对于 `conv_create`：T_cont 注入 `ResponseInputItem::FunctionCallOutput { call_id, output }`，其中 `output.content` 为 T_new 的“最后一条助手消息”
+- 对于 `conv_send`：T_cont 注入 `ResponseInputItem::FunctionCallOutput { call_id, output }`，其中 `output.content` 为 T_target 的“最后一条助手消息”
 - 实现提示：在 `handle_function_call()` 处理中捕获 `call_id`/ 工具名，并将其随 `TaskPlan` 传递，以便 T_cont 能闭合对应的 `FunctionCallOutput`
 
 ---
@@ -157,7 +157,7 @@
 ### 5) `conversation` 元数据
 - 新增并维护 `last_active_at: Instant`：
   - 在写入历史（record_items）与 `TaskComplete` 时刷新
-  - `conv.list` 对外返回时序列化为 RFC3339 字符串
+- `conv_list` 对外返回时序列化为 RFC3339 字符串
 
 ---
 
@@ -166,23 +166,23 @@
 ### openai_tools.rs
 
 - 在 `get_openai_tools()` 中新增 5 个工具定义（`JsonSchema::Object`）
-- 描述字段明确：`conv.create`/`conv.send` 为打断型、其余为非打断型
+- 描述字段明确：`conv_create`/`conv_send` 为打断型、其余为非打断型
 
 ### codex.rs（handle_function_call）
 
 - 新增分支：
-  - `conv.create`：
+  - `conv_create`：
     - 解析 `base_instruction_text` / `base_instruction_file`
       - 路径解释：`base_instruction_file` 为相对 `turn_context.cwd` 的相对路径或绝对路径
       - 失败语义：文件不存在/读取失败时，直接返回 `FunctionCallOutput`，其中 `output.success = Some(false)`，`output.content` 为简要摘要（例如 `"failed to read base_instruction_file"`）；不进行任务替换与排队（不启动 T_new/T_cont），避免把失败详情注入模型上下文
     - `open_conversation_with(spec)` → `conversation_id`
     - `abort_current_and_enqueue([T_new(user_instruction), T_cont(return=last_assistant_message_of_T_new)])`
     - 返回 JSON（包含 `conversation_id`/`last_assistant_message`），`FunctionCallOutput` 在 T_cont 注入
-  - `conv.send`：
+  - `conv_send`：
     - 解析 `conversation_id`
     - `abort_current_and_enqueue([T_target(text/items), T_cont(return=last_assistant_message_of_T_target)])`
     - 返回 JSON（包含 `conversation_id`/`last_assistant_message`），`FunctionCallOutput` 在 T_cont 注入
-  - `conv.list` / `conv.history` / `conv.destroy`：直接读取 / 修改内存并 `FunctionCallOutput` 返回
+  - `conv_list` / `conv_history` / `conv_destroy`：直接读取 / 修改内存并 `FunctionCallOutput` 返回
 
 ---
 
@@ -192,7 +192,7 @@
   - 原 `conversation`：`TurnAborted(Replaced)`
   - 目标 `conversation`（T_new/T_target）：`TaskStarted` → `AgentMessageDelta`（可选）→ `TokenCount`（可选）→ `TaskComplete`
   - 原 `conversation`（T_cont）：`TaskStarted` → `AgentMessageDelta`（可选）→ `TaskComplete`
-- 前端以 `Event.conversation_id` 路由 UI；在替换发生时提示“当前 `task` 被 `conv.*` 替换，正在执行目标 `conversation`…”
+- 前端以 `Event.conversation_id` 路由 UI；在替换发生时提示“当前 `task` 被 `conv_*` 替换，正在执行目标 `conversation`…”
 - 非打断工具：仅返回 `FunctionCallOutput`
 
 ---
@@ -201,8 +201,8 @@
 
 - `conversation` 不存在 / 编号无效：{ ok: false, reason: "conversation not found" } 或 `success: false`
 - 读取 `base_instruction_file` 失败：`success: false`
-- 失败返回注入约束：对于 `conv.create` 参数预处理阶段的失败（如文件读取失败），直接返回失败；不要替换当前 `task`，也不要启动后续计划（T_new/T_cont），并避免在模型上下文注入冗长失败详情（仅返回简要摘要）
-- `conv.send` 参数校验：`text` 与 `items` 至少一项
+- 失败返回注入约束：对于 `conv_create` 参数预处理阶段的失败（如文件读取失败），直接返回失败；不要替换当前 `task`，也不要启动后续计划（T_new/T_cont），并避免在模型上下文注入冗长失败详情（仅返回简要摘要）
+- `conv_send` 参数校验：`text` 与 `items` 至少一项
 - 禁止销毁 root `conversation`
 
 ---
@@ -217,11 +217,11 @@
 ## 返回值与模型交互
 
 - 所有工具的 `FunctionCallOutputPayload.content` 使用 JSON 字符串：
-  - `conv.create`：主字段 `last_assistant_message`（返回值）；附带 `conversation_id`
-  - `conv.send`：主字段 `last_assistant_message`；附带 `conversation_id`
-  - `conv.list`：`conversations`
-  - `conv.history`：`entries`
-  - `conv.destroy`：`{ ok }`、`reason?`
+  - `conv_create`：主字段 `last_assistant_message`（返回值）；附带 `conversation_id`
+  - `conv_send`：主字段 `last_assistant_message`；附带 `conversation_id`
+  - `conv_list`：`conversations`
+  - `conv_history`：`entries`
+  - `conv_destroy`：`{ ok }`、`reason?`
   - 失败时设置 `success: Some(false)` 并提供简要摘要（如 `"failed to read base_instruction_file"`）
  
 ---

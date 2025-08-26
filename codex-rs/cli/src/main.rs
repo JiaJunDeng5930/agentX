@@ -77,7 +77,7 @@ enum Subcommand {
     #[clap(hide = true)]
     GenerateTs(GenerateTsCommand),
 
-    /// Invoke a conv.* tool directly (testing/diagnostics).
+    /// Invoke a conv_* tool directly (testing/diagnostics).
     #[clap(hide = true)]
     Conv(ConvCli),
 }
