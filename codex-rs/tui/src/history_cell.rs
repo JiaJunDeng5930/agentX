@@ -261,10 +261,16 @@ pub(crate) fn new_session_info(
     }
 }
 
-pub(crate) fn new_user_prompt(message: String) -> PlainHistoryCell {
+pub(crate) fn new_user_prompt(message: String, conv_short: Option<String>) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(""));
-    lines.push(Line::from("user".cyan().bold()));
+    let header = match conv_short {
+        Some(s) if !s.is_empty() => {
+            Line::from(vec![format!("[conv {s}] ").dim(), "user".cyan().bold()])
+        }
+        _ => Line::from("user".cyan().bold()),
+    };
+    lines.push(header);
     lines.extend(message.lines().map(|l| Line::from(l.to_string())));
 
     PlainHistoryCell { lines }

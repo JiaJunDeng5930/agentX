@@ -55,6 +55,11 @@ impl StreamController {
         self.header.reset_for_new_turn();
     }
 
+    /// Set the short conversation id used by the stream header renderer.
+    pub(crate) fn set_conv_short_id(&mut self, short: Option<String>) {
+        self.header.set_conv_short(short);
+    }
+
     pub(crate) fn is_write_cycle_active(&self) -> bool {
         self.active
     }

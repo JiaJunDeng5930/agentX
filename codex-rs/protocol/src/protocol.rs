@@ -108,7 +108,6 @@ pub enum Op {
         conversation_id: Option<String>,
     },
 
-
     /// Override parts of the persistent turn context for subsequent turns.
     ///
     /// All fields are optional; when omitted, the existing value is preserved.
@@ -167,7 +166,10 @@ pub enum Op {
     },
 
     /// Request a single history entry identified by `log_id` + `offset`.
-    GetHistoryEntryRequest { offset: usize, log_id: u64 },
+    GetHistoryEntryRequest {
+        offset: usize,
+        log_id: u64,
+    },
 
     /// Request the full in-memory conversation transcript for the current session.
     /// Reply is delivered via `EventMsg::ConversationHistory`.

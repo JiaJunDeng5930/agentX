@@ -38,6 +38,7 @@ impl StreamState {
 pub(crate) struct HeaderEmitter {
     emitted_this_turn: bool,
     emitted_in_stream: bool,
+    conv_short: Option<String>,
 }
 
 impl HeaderEmitter {
@@ -45,6 +46,7 @@ impl HeaderEmitter {
         Self {
             emitted_this_turn: false,
             emitted_in_stream: false,
+            conv_short: None,
         }
     }
 
@@ -66,16 +68,26 @@ impl HeaderEmitter {
         if !self.emitted_in_stream && !self.emitted_this_turn {
             // Add a leading blank line before the header for visual spacing
             out_lines.push(ratatui::text::Line::from(""));
-            out_lines.push(render_header_line());
+            out_lines.push(render_header_line(self.conv_short.as_ref()));
             self.emitted_in_stream = true;
             self.emitted_this_turn = true;
             return true;
         }
         false
     }
+
+    pub(crate) fn set_conv_short(&mut self, short: Option<String>) {
+        self.conv_short = short;
+    }
 }
 
-fn render_header_line() -> ratatui::text::Line<'static> {
+fn render_header_line(conv_short: Option<&String>) -> ratatui::text::Line<'static> {
     use ratatui::style::Stylize;
-    ratatui::text::Line::from("codex".magenta().bold())
+    match conv_short {
+        Some(s) if !s.is_empty() => ratatui::text::Line::from(vec![
+            format!("[conv {s}] ").dim(),
+            "agentx".magenta().bold(),
+        ]),
+        _ => ratatui::text::Line::from("agentx".magenta().bold()),
+    }
 }

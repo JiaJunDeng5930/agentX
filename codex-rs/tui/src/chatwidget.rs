@@ -749,20 +749,28 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::CodexOp(Op::ConvList));
             }
             SlashCommand::ConvHistory => {
-                self.app_event_tx
-                    .send(AppEvent::CodexOp(Op::ConvHistory { conversation_id: None, limit: None }));
+                self.app_event_tx.send(AppEvent::CodexOp(Op::ConvHistory {
+                    conversation_id: None,
+                    limit: None,
+                }));
             }
             SlashCommand::ConvCreate => {
-                self.app_event_tx
-                    .send(AppEvent::CodexOp(Op::ConvCreate { base_instruction_text: None, base_instruction_file: None, user_instruction: None }));
+                self.app_event_tx.send(AppEvent::CodexOp(Op::ConvCreate {
+                    base_instruction_text: None,
+                    base_instruction_file: None,
+                    user_instruction: None,
+                }));
             }
             SlashCommand::ConvSend => {
-                self.app_event_tx
-                    .send(AppEvent::CodexOp(Op::ConvSend { conversation_id: None, text: None }));
+                self.app_event_tx.send(AppEvent::CodexOp(Op::ConvSend {
+                    conversation_id: None,
+                    text: None,
+                }));
             }
             SlashCommand::ConvDestroy => {
-                self.app_event_tx
-                    .send(AppEvent::CodexOp(Op::ConvDestroy { conversation_id: None }));
+                self.app_event_tx.send(AppEvent::CodexOp(Op::ConvDestroy {
+                    conversation_id: None,
+                }));
             }
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => {
@@ -868,7 +876,12 @@ impl ChatWidget {
 
         // Only show the text portion in conversation history.
         if !text.is_empty() {
-            self.add_to_history(history_cell::new_user_prompt(text.clone()));
+            let short = self.active_conv_id.map(|u| {
+                let s = u.as_simple().to_string();
+                let n = s.len().min(8);
+                s[..n].to_string()
+            });
+            self.add_to_history(history_cell::new_user_prompt(text.clone(), short));
         }
     }
 
@@ -906,11 +919,19 @@ impl ChatWidget {
                 self.on_task_started();
                 self.active_conv_id = event.conversation_id;
                 self.bottom_pane.set_active_conv_id(self.active_conv_id);
+                // Also update stream header with current conversation short id.
+                let short = self.active_conv_id.map(|u| {
+                    let s = u.as_simple().to_string();
+                    let n = s.len().min(8);
+                    s[..n].to_string()
+                });
+                self.stream.set_conv_short_id(short);
             }
             EventMsg::TaskComplete(TaskCompleteEvent { .. }) => {
                 self.on_task_complete();
                 self.active_conv_id = None;
                 self.bottom_pane.set_active_conv_id(None);
+                self.stream.set_conv_short_id(None);
             }
             EventMsg::TokenCount(token_usage) => self.on_token_count(token_usage),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
