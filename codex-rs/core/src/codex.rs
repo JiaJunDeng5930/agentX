@@ -367,6 +367,8 @@ pub(crate) struct Session {
     task_registry: TaskRegistry,
     /// Minimal FIFO队列，保证打断型工具的顺序化执行
     pending_tasks: Mutex<std::collections::VecDeque<TaskPlan>>,
+    /// Current consecutive interrupt‑chain depth (conv.* tools)
+    interrupt_chain_depth: Mutex<u32>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     user_shell: shell::Shell,
     show_raw_agent_reasoning: bool,
@@ -388,9 +390,17 @@ pub(crate) struct TurnContext {
 
 impl TurnContext {
     fn resolve_path(&self, path: Option<String>) -> PathBuf {
-        path.as_ref()
-            .map(PathBuf::from)
-            .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
+        match path {
+            None => self.cwd.clone(),
+            Some(p) => {
+                let pbuf = PathBuf::from(p);
+                if pbuf.is_absolute() {
+                    pbuf
+                } else {
+                    self.cwd.join(pbuf)
+                }
+            }
+        }
     }
 }
 
@@ -669,6 +679,7 @@ impl Session {
             )])),
             task_registry: TaskRegistry::default(),
             pending_tasks: Mutex::new(std::collections::VecDeque::new()),
+            interrupt_chain_depth: Mutex::new(0),
         });
 
         // record the initial user instructions and environment context,
@@ -1304,6 +1315,11 @@ impl Session {
             && let Some(last) =
                 sess.get_last_assistant_message_for_conv(closure.msg_from_conversation)
         {
+            {
+                let mut d = sess.interrupt_chain_depth.lock_unchecked();
+                *d = 0;
+            }
+
             // 将返回值包装为 JSON：{ conversation_id, last_assistant_message }
             let payload = serde_json::json!({
                 "conversation_id": closure.msg_from_conversation.to_string(),
@@ -2985,6 +3001,20 @@ async fn handle_function_call(
                     },
                 };
             }
+            // Enforce optional fairness bound on consecutive interrupting conv.* calls.
+            if let Some(max) = turn_context.client.get_max_interrupt_chain_depth() {
+                let mut depth = sess.interrupt_chain_depth.lock_unchecked();
+                if *depth >= max {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: "interrupt chain depth exceeded".into(),
+                            success: Some(false),
+                        },
+                    };
+                }
+                *depth += 1;
+            }
             let plans = vec![
                 TaskPlan {
                     conversation_id: target_id,
@@ -3072,6 +3102,20 @@ async fn handle_function_call(
                 };
             }
 
+            // Enforce optional fairness bound on consecutive interrupting conv.* calls.
+            if let Some(max) = turn_context.client.get_max_interrupt_chain_depth() {
+                let mut depth = sess.interrupt_chain_depth.lock_unchecked();
+                if *depth >= max {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: "interrupt chain depth exceeded".into(),
+                            success: Some(false),
+                        },
+                    };
+                }
+                *depth += 1;
+            }
             let plans = vec![
                 TaskPlan {
                     conversation_id: target_id,

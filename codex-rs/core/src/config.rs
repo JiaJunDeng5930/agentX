@@ -188,6 +188,9 @@ pub struct Config {
     pub auto_compact_threshold_percent: u8,
     /// Optional: interrupt mid-turn to compact (heuristic).
     pub auto_compact_interrupt_mid_turn: bool,
+
+    /// Limit for consecutive interrupting conv.* tool calls; None means unlimited.
+    pub max_interrupt_chain_depth: Option<u32>,
 }
 
 impl Config {
@@ -498,6 +501,8 @@ pub struct ConfigToml {
 
     /// Auto-compact settings.
     pub auto_compact: Option<AutoCompactToml>,
+    /// Limit for consecutive interrupting conv.* tool calls in a chain.
+    pub max_interrupt_chain_depth: Option<u32>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -818,6 +823,7 @@ impl Config {
             auto_compact_enabled: auto_enabled,
             auto_compact_threshold_percent: auto_threshold,
             auto_compact_interrupt_mid_turn: auto_interrupt,
+            max_interrupt_chain_depth: cfg.max_interrupt_chain_depth,
         };
         Ok(config)
     }
@@ -1190,6 +1196,7 @@ disable_response_storage = true
                 auto_compact_enabled: false,
                 auto_compact_threshold_percent: 15,
                 auto_compact_interrupt_mid_turn: false,
+                max_interrupt_chain_depth: None,
             },
             o3_profile_config
         );
@@ -1250,6 +1257,7 @@ disable_response_storage = true
             auto_compact_enabled: false,
             auto_compact_threshold_percent: 15,
             auto_compact_interrupt_mid_turn: false,
+            max_interrupt_chain_depth: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1325,6 +1333,7 @@ disable_response_storage = true
             auto_compact_enabled: false,
             auto_compact_threshold_percent: 15,
             auto_compact_interrupt_mid_turn: false,
+            max_interrupt_chain_depth: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

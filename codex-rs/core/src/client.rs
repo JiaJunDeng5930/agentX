@@ -389,6 +389,11 @@ impl ModelClient {
     pub fn get_auto_compact_interrupt_mid_turn(&self) -> bool {
         self.config.auto_compact_interrupt_mid_turn
     }
+
+    /// Returns configured limit for consecutive interrupting conv.* tool calls.
+    pub fn get_max_interrupt_chain_depth(&self) -> Option<u32> {
+        self.config.max_interrupt_chain_depth
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
