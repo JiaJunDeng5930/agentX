@@ -1267,17 +1267,12 @@ impl Session {
         if id == self.root_conversation_id() {
             return Some(self.root_conversation.clone());
         }
-        self.conversations
-            .read()
-            .ok()
-            .and_then(|m| m.get(&id).cloned())
+        self.conversations.read().ok().and_then(|m| m.get(&id).cloned())
     }
 
     fn enqueue(&self, plans: Vec<TaskPlan>) {
         let mut q = self.pending_tasks.lock_unchecked();
-        for p in plans {
-            q.push_back(p);
-        }
+        for p in plans { q.push_back(p); }
     }
 
     fn abort_current_and_enqueue(&self, plans: Vec<TaskPlan>) {
@@ -1293,45 +1288,33 @@ impl Session {
 
     fn maybe_start_next_task_arc(sess: &Arc<Self>, turn_context: &TurnContext) {
         // 已经在运行则不启动
-        if sess.state.lock_unchecked().current_task.is_some() {
-            return;
-        }
+        if sess.state.lock_unchecked().current_task.is_some() { return; }
         let plan_opt = { sess.pending_tasks.lock_unchecked().pop_front() };
         let Some(plan) = plan_opt else { return };
 
         // 注入闭合输出（若存在）
         if let Some(closure) = &plan.closure
-            && let Some(last) =
-                sess.get_last_assistant_message_for_conv(closure.msg_from_conversation)
-        {
-            let item = ResponseInputItem::FunctionCallOutput {
-                call_id: closure.call_id.clone(),
-                output: FunctionCallOutputPayload {
-                    content: last,
-                    success: Some(true),
-                },
-            };
-            if let Some(conv) = sess.get_conversation_by_id(plan.conversation_id) {
-                conv.state.lock_unchecked().pending_input.push(item);
+            && let Some(last) = sess.get_last_assistant_message_for_conv(closure.msg_from_conversation) {
+                let item = ResponseInputItem::FunctionCallOutput {
+                    call_id: closure.call_id.clone(),
+                    output: FunctionCallOutputPayload { content: last, success: Some(true) },
+                };
+                if let Some(conv) = sess.get_conversation_by_id(plan.conversation_id) {
+                    conv.state.lock_unchecked().pending_input.push(item);
+                }
             }
-        }
 
         // 启动计划任务
-        let conv = match sess.get_conversation_by_id(plan.conversation_id) {
-            Some(c) => c,
-            None => return,
-        };
+        let conv = match sess.get_conversation_by_id(plan.conversation_id) { Some(c) => c, None => return };
         let mut items = plan.input_items.clone();
         if items.is_empty() {
-            items.push(InputItem::Text {
-                text: "".to_string(),
-            });
+            items.push(InputItem::Text { text: "".to_string() });
         }
         let sub_id = format!("conv/{}", uuid::Uuid::new_v4());
         let task = AgentTask::spawn(
             sess.clone(),
             conv,
-            Arc::new(TurnContext {
+            Arc::new(TurnContext { 
                 client: turn_context.client.clone(),
                 cwd: turn_context.cwd.clone(),
                 approval_policy: turn_context.approval_policy,
@@ -1361,30 +1344,20 @@ impl Session {
     ) -> uuid::Uuid {
         let id = uuid::Uuid::new_v4();
         let mut view = McpView::new_from_manager(&self.mcp_connection_manager);
-        if let Some(allow) = mcp_allowlist {
-            view = view.with_allowlist(allow);
-        }
+        if let Some(allow) = mcp_allowlist { view = view.with_allowlist(allow); }
         let conv = Arc::new(Conversation {
             id,
-            state: Mutex::new(ConversationState {
-                pending_input: Vec::new(),
-                history: ConversationHistory::new(),
-                baseline_used_tokens: None,
-            }),
+            state: Mutex::new(ConversationState { pending_input: Vec::new(), history: ConversationHistory::new(), baseline_used_tokens: None }),
             storage_policy: self.root_conversation.storage_policy.clone(),
             ctx: ConversationContext {
-                base_instructions: base_instructions_override
-                    .or_else(|| self.root_conversation.ctx.base_instructions.clone()),
+                base_instructions: base_instructions_override.or_else(|| self.root_conversation.ctx.base_instructions.clone()),
                 user_instructions,
                 mcp_view: view,
-                tools_prefs: tools_prefs_override
-                    .unwrap_or_else(|| self.root_conversation.ctx.tools_prefs.clone()),
+                tools_prefs: tools_prefs_override.unwrap_or_else(|| self.root_conversation.ctx.tools_prefs.clone()),
             },
             last_active_at: Mutex::new(std::time::SystemTime::now()),
         });
-        if let Ok(mut map) = self.conversations.write() {
-            map.insert(id, conv);
-        }
+        if let Ok(mut map) = self.conversations.write() { map.insert(id, conv); }
         id
     }
 }
@@ -2104,7 +2077,7 @@ async fn run_turn(
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: String,
     input: Vec<ResponseItem>,
-) -> CodexResult<(
+ ) -> CodexResult<(
     Vec<ProcessedResponseItem>,
     Option<crate::protocol::TokenUsage>,
 )> {
@@ -2119,9 +2092,6 @@ async fn run_turn(
         prefs.include_apply_patch_tool,
         prefs.web_search_request,
         prefs.use_streamable_shell_tool,
-        // include conv tools only for Responses API
-        turn_context.client.get_provider().wire_api
-            == crate::model_provider_info::WireApi::Responses,
     );
     let tools = get_openai_tools(&tools_config, Some(conv.ctx.mcp_view.list_tools()));
 
@@ -2201,7 +2171,7 @@ async fn try_run_turn(
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: &str,
     prompt: &Prompt,
-) -> CodexResult<(
+ ) -> CodexResult<(
     Vec<ProcessedResponseItem>,
     Option<crate::protocol::TokenUsage>,
 )> {
@@ -2791,10 +2761,9 @@ async fn handle_function_call(
                 .filter(|it| matches!(it, ResponseItem::Message { .. }))
                 .collect();
             if let Some(limit) = args.limit
-                && messages.len() > limit
-            {
-                messages = messages.split_off(messages.len() - limit);
-            }
+                && messages.len() > limit {
+                    messages = messages.split_off(messages.len() - limit);
+                }
             let mut entries = Vec::new();
             for msg in messages {
                 if let ResponseItem::Message { role, content, .. } = msg {
@@ -2881,7 +2850,7 @@ async fn handle_function_call(
                 },
             }
         }
-        "conv.create" => {
+                "conv.create" => {
             #[derive(serde::Deserialize)]
             struct Args {
                 #[serde(default)]
@@ -2910,175 +2879,72 @@ async fn handle_function_call(
             let args: Args = match serde_json::from_str(&arguments) {
                 Ok(a) => a,
                 Err(e) => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("failed to parse arguments: {e}"),
-                            success: Some(false),
-                        },
-                    };
+                    return ResponseInputItem::FunctionCallOutput { call_id, output: FunctionCallOutputPayload { content: format!("failed to parse arguments: {e}"), success: Some(false) } };
                 }
             };
 
             // Resolve base instructions
             let mut base_override = args.base_instruction_text.clone();
             if base_override.is_none()
-                && let Some(path) = &args.base_instruction_file
-            {
-                let path = turn_context.resolve_path(Some(path.clone()));
-                match std::fs::read_to_string(&path) {
-                    Ok(s) => base_override = Some(s),
-                    Err(_) => {
-                        return ResponseInputItem::FunctionCallOutput {
-                            call_id,
-                            output: FunctionCallOutputPayload {
-                                content: "failed to read base_instruction_file".to_string(),
-                                success: Some(false),
-                            },
-                        };
+                && let Some(path) = &args.base_instruction_file {
+                    let path = turn_context.resolve_path(Some(path.clone()));
+                    match std::fs::read_to_string(&path) {
+                        Ok(s) => base_override = Some(s),
+                        Err(_) => {
+                            return ResponseInputItem::FunctionCallOutput { call_id, output: FunctionCallOutputPayload { content: "failed to read base_instruction_file".to_string(), success: Some(false) } };
+                        }
                     }
                 }
-            }
 
-            let allow = args
-                .mcp_allowlist
-                .map(|v| v.into_iter().collect::<std::collections::HashSet<_>>());
+            let allow = args.mcp_allowlist.map(|v| v.into_iter().collect::<std::collections::HashSet<_>>());
             let tools = args.internal_tools.map(|t| ToolsPrefs {
-                include_plan_tool: t
-                    .include_plan_tool
-                    .unwrap_or(conv.ctx.tools_prefs.include_plan_tool),
-                include_apply_patch_tool: t
-                    .include_apply_patch_tool
-                    .unwrap_or(conv.ctx.tools_prefs.include_apply_patch_tool),
-                web_search_request: t
-                    .web_search_request
-                    .unwrap_or(conv.ctx.tools_prefs.web_search_request),
-                use_streamable_shell_tool: t
-                    .use_streamable_shell_tool
-                    .unwrap_or(conv.ctx.tools_prefs.use_streamable_shell_tool),
+                include_plan_tool: t.include_plan_tool.unwrap_or(conv.ctx.tools_prefs.include_plan_tool),
+                include_apply_patch_tool: t.include_apply_patch_tool.unwrap_or(conv.ctx.tools_prefs.include_apply_patch_tool),
+                web_search_request: t.web_search_request.unwrap_or(conv.ctx.tools_prefs.web_search_request),
+                use_streamable_shell_tool: t.use_streamable_shell_tool.unwrap_or(conv.ctx.tools_prefs.use_streamable_shell_tool),
             });
 
             let target_id = sess.open_conversation_with(base_override.clone(), None, allow, tools);
 
             // 构造任务计划：先在新对话跑一轮，再在原对话注入闭合
             let mut input_items = Vec::new();
-            if let Some(text) = args.user_instruction {
-                input_items.push(InputItem::Text { text });
-            }
+            if let Some(text) = args.user_instruction { input_items.push(InputItem::Text { text }); }
             let plans = vec![
-                TaskPlan {
-                    conversation_id: target_id,
-                    input_items: input_items.clone(),
-                    base_instructions_override: None,
-                    closure: None,
-                },
-                TaskPlan {
-                    conversation_id: conv.id,
-                    input_items: vec![InputItem::Text { text: "".into() }],
-                    base_instructions_override: None,
-                    closure: Some(TaskClosure {
-                        call_id: call_id.clone(),
-                        tool_name: name.clone(),
-                        msg_from_conversation: target_id,
-                    }),
-                },
+                TaskPlan { conversation_id: target_id, input_items: input_items.clone(), base_instructions_override: None, closure: None },
+                TaskPlan { conversation_id: conv.id, input_items: vec![InputItem::Text { text: "".into() }], base_instructions_override: None, closure: Some(TaskClosure { call_id: call_id.clone(), tool_name: name.clone(), msg_from_conversation: target_id }) },
             ];
             sess.abort_current_and_enqueue(plans);
             Session::maybe_start_next_task_arc(&sess, turn_context);
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!(
-                        "{{\"conversation_id\":\"{}\",\"last_assistant_message\":\"\"}}",
-                        target_id
-                    ),
-                    success: Some(true),
-                },
-            }
-        }
+            ResponseInputItem::FunctionCallOutput { call_id, output: FunctionCallOutputPayload { content: format!("{{\"conversation_id\":\"{}\",\"last_assistant_message\":\"\"}}", target_id), success: Some(true) } }
+        },
         "conv.send" => {
             #[derive(serde::Deserialize)]
-            struct Args {
-                conversation_id: String,
-                #[serde(default)]
-                text: Option<String>,
-            }
+            struct Args { conversation_id: String, #[serde(default)] text: Option<String> }
             let args: Args = match serde_json::from_str(&arguments) {
                 Ok(a) => a,
                 Err(e) => {
-                    return ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: format!("failed to parse arguments: {e}"),
-                            success: Some(false),
-                        },
-                    };
+                    return ResponseInputItem::FunctionCallOutput { call_id, output: FunctionCallOutputPayload { content: format!("failed to parse arguments: {e}"), success: Some(false) } };
                 }
             };
             let Ok(target_id) = uuid::Uuid::parse_str(&args.conversation_id) else {
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: FunctionCallOutputPayload {
-                        content: "conversation not found".into(),
-                        success: Some(false),
-                    },
-                };
+                return ResponseInputItem::FunctionCallOutput { call_id, output: FunctionCallOutputPayload { content: "conversation not found".into(), success: Some(false) } };
             };
             if sess.get_conversation_by_id(target_id).is_none() {
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: FunctionCallOutputPayload {
-                        content: "conversation not found".into(),
-                        success: Some(false),
-                    },
-                };
+                return ResponseInputItem::FunctionCallOutput { call_id, output: FunctionCallOutputPayload { content: "conversation not found".into(), success: Some(false) } };
             }
             let mut items = Vec::new();
-            if let Some(t) = args.text {
-                items.push(InputItem::Text { text: t });
-            }
-            if items.is_empty() {
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: FunctionCallOutputPayload {
-                        content: "text or items required".into(),
-                        success: Some(false),
-                    },
-                };
-            }
+            if let Some(t) = args.text { items.push(InputItem::Text { text: t }); }
+            if items.is_empty() { return ResponseInputItem::FunctionCallOutput { call_id, output: FunctionCallOutputPayload { content: "text or items required".into(), success: Some(false) } }; }
 
             let plans = vec![
-                TaskPlan {
-                    conversation_id: target_id,
-                    input_items: items,
-                    base_instructions_override: None,
-                    closure: None,
-                },
-                TaskPlan {
-                    conversation_id: conv.id,
-                    input_items: vec![InputItem::Text { text: "".into() }],
-                    base_instructions_override: None,
-                    closure: Some(TaskClosure {
-                        call_id: call_id.clone(),
-                        tool_name: name.clone(),
-                        msg_from_conversation: target_id,
-                    }),
-                },
+                TaskPlan { conversation_id: target_id, input_items: items, base_instructions_override: None, closure: None },
+                TaskPlan { conversation_id: conv.id, input_items: vec![InputItem::Text { text: "".into() }], base_instructions_override: None, closure: Some(TaskClosure { call_id: call_id.clone(), tool_name: name.clone(), msg_from_conversation: target_id }) },
             ];
             sess.abort_current_and_enqueue(plans);
             Session::maybe_start_next_task_arc(&sess, turn_context);
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!(
-                        "{{\"conversation_id\":\"{}\",\"last_assistant_message\":\"\"}}",
-                        target_id
-                    ),
-                    success: Some(true),
-                },
-            }
-        }
-        "container.exec" | "shell" => {
+            ResponseInputItem::FunctionCallOutput { call_id, output: FunctionCallOutputPayload { content: format!("{{\"conversation_id\":\"{}\",\"last_assistant_message\":\"\"}}", target_id), success: Some(true) } }
+        },
+"container.exec" | "shell" => {
             let params = match parse_container_exec_arguments(arguments, turn_context, &call_id) {
                 Ok(params) => params,
                 Err(output) => {

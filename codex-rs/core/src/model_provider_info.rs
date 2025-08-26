@@ -12,6 +12,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::env::VarError;
 use std::time::Duration;
+use tracing::debug;
 
 use crate::error::EnvVarError;
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
@@ -108,11 +109,41 @@ impl ModelProviderInfo {
         };
 
         let url = self.get_full_url(&effective_auth);
+        debug!(
+            "Preparing request: wire_api={:?}, url={}, base_url={:?}, has_auth={}",
+            self.wire_api,
+            url,
+            self.base_url,
+            effective_auth.is_some()
+        );
 
         let mut builder = client.post(url);
 
         if let Some(auth) = effective_auth.as_ref() {
-            builder = builder.bearer_auth(auth.get_token().await?);
+            // Some environments may use a dummy env var (e.g. PATH) as the API key,
+            // which can unexpectedly contain newlines or other control characters.
+            // Those are invalid in HTTP headers and cause a reqwest "builder error".
+            // Sanitize the token to avoid that.
+            let raw_token = auth.get_token().await?;
+            let sanitized: String = raw_token
+                .chars()
+                .filter(|c| c.is_ascii() && !c.is_control())
+                .collect();
+            if sanitized.is_empty() {
+                debug!(
+                    "Authorization token empty after sanitization; skipping Authorization header"
+                );
+            } else if sanitized == raw_token {
+                builder = builder.bearer_auth(sanitized);
+            } else {
+                debug!(
+                    "Authorization token contained control/non-ASCII characters; sanitized before setting header"
+                );
+                builder = builder.header(
+                    reqwest::header::AUTHORIZATION,
+                    format!("Bearer {}", sanitized),
+                );
+            }
         }
 
         Ok(self.apply_http_headers(builder))
