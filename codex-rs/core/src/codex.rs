@@ -2891,6 +2891,8 @@ async fn handle_function_call(
                 #[serde(default)]
                 user_instruction: Option<String>,
                 #[serde(default)]
+                items: Option<Vec<InputItem>>,
+                #[serde(default)]
                 mcp_allowlist: Option<Vec<String>>,
                 #[serde(default)]
                 internal_tools: Option<InternalTools>,
@@ -2961,9 +2963,21 @@ async fn handle_function_call(
             let target_id = sess.open_conversation_with(base_override.clone(), None, allow, tools);
 
             // 构造任务计划：先在新对话跑一轮，再在原对话注入闭合
-            let mut input_items = Vec::new();
+            let mut input_items: Vec<InputItem> = Vec::new();
+            if let Some(mut items) = args.items {
+                input_items.append(&mut items);
+            }
             if let Some(text) = args.user_instruction {
                 input_items.push(InputItem::Text { text });
+            }
+            if input_items.is_empty() {
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: "user_instruction or items required".into(),
+                        success: Some(false),
+                    },
+                };
             }
             let plans = vec![
                 TaskPlan {
@@ -3002,6 +3016,8 @@ async fn handle_function_call(
                 conversation_id: String,
                 #[serde(default)]
                 text: Option<String>,
+                #[serde(default)]
+                items: Option<Vec<InputItem>>,
             }
             let args: Args = match serde_json::from_str(&arguments) {
                 Ok(a) => a,
@@ -3033,9 +3049,12 @@ async fn handle_function_call(
                     },
                 };
             }
-            let mut items = Vec::new();
+            let mut items: Vec<InputItem> = Vec::new();
             if let Some(t) = args.text {
                 items.push(InputItem::Text { text: t });
+            }
+            if let Some(mut extra) = args.items {
+                items.append(&mut extra);
             }
             if items.is_empty() {
                 return ResponseInputItem::FunctionCallOutput {
