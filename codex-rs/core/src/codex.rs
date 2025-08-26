@@ -4488,8 +4488,68 @@ async fn inline_compact(
         }
     }
 
-    // Prune history to only the last assistant message (summary).
-    conv.state.lock_unchecked().history.keep_last_messages(1);
+    // Prune history, but preserve any pending tool-call requests needed to match
+    // forthcoming FunctionCallOutput items in `pending_input`. This avoids a
+    // Responses API error where a tool output has no corresponding tool call
+    // (call_id) present in the same prompt.
+    {
+        use codex_protocol::models::ResponseInputItem as RII;
+        use codex_protocol::models::ResponseItem as RI;
+        let mut st = conv.state.lock_unchecked();
+        let items = st.history.contents();
+        // 1) Collect pending function call_ids that we are about to respond to.
+        let pending_call_ids: std::collections::HashSet<String> = st
+            .pending_input
+            .iter()
+            .filter_map(|it| match it {
+                RII::FunctionCallOutput { call_id, .. } => Some(call_id.clone()),
+                _ => None,
+            })
+            .collect();
+        // 2) Find the last assistant message (the summary we want to keep).
+        let last_assistant = items.iter().rev().find_map(|it| match it {
+            RI::Message { role, content, .. } if role == "assistant" => Some(RI::Message {
+                id: None,
+                role: role.clone(),
+                content: content.clone(),
+            }),
+            _ => None,
+        });
+        // 3) Preserve any FunctionCall entries that match pending call_ids.
+        let mut kept: Vec<RI> = Vec::new();
+        if !pending_call_ids.is_empty() {
+            for it in items.iter() {
+                if let RI::FunctionCall {
+                    name,
+                    arguments,
+                    call_id,
+                    ..
+                } = it
+                {
+                    if pending_call_ids.contains(call_id) {
+                        kept.push(RI::FunctionCall {
+                            id: None,
+                            name: name.clone(),
+                            arguments: arguments.clone(),
+                            call_id: call_id.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        // 4) Append the last assistant message (summary) as the final item.
+        if let Some(a) = last_assistant {
+            kept.push(a);
+        }
+        // 5) Replace history with the reduced set and recompute token count.
+        if kept.is_empty() {
+            st.history.keep_last_messages(1);
+        } else {
+            let mut new_hist = crate::conversation_history::ConversationHistory::new();
+            new_hist.record_items(kept.iter());
+            st.history = new_hist;
+        }
+    }
     Ok(())
 }
 
