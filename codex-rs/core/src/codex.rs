@@ -4359,3 +4359,110 @@ mod tests {
         assert_eq!(expected, got);
     }
 }
+
+
+#[cfg(test)]
+mod conv_tools_tests {
+    use super::*;
+    use codex_login::AuthManager;
+    use tempfile::TempDir;
+    use tokio::sync::mpsc;
+    use uuid::Uuid;
+    async fn make_session() -> (Arc<Session>, TurnContext, Arc<Conversation>) {
+        let (tx_event, _rx_event) = async_channel::bounded::<Event>(64);
+        let provider = crate::model_provider_info::built_in_model_providers()
+            .remove("openai")
+            .expect("openai provider exists");
+        let codex_home = TempDir::new().unwrap();
+        let mut cfg = crate::config::Config::load_from_base_config_with_overrides(
+            crate::config::ConfigToml::default(),
+            crate::config::ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load config");
+        cfg.cwd = std::env::current_dir().unwrap();
+        let cfg = Arc::new(cfg);
+        let configure_session = ConfigureSession {
+            provider,
+            model: cfg.model.clone(),
+            model_reasoning_effort: cfg.model_reasoning_effort,
+            model_reasoning_summary: cfg.model_reasoning_summary,
+            user_instructions: cfg.user_instructions.clone(),
+            base_instructions: cfg.base_instructions.clone(),
+            approval_policy: cfg.approval_policy,
+            sandbox_policy: cfg.sandbox_policy.clone(),
+            disable_response_storage: cfg.disable_response_storage,
+            notify: None,
+            cwd: cfg.cwd.clone(),
+            resume_path: None,
+        };
+        let auth = Arc::new(AuthManager::new(cfg.codex_home.clone(), cfg.preferred_auth_method));
+        let (sess, tc) = Session::new(configure_session, cfg.clone(), auth, tx_event, None).await.unwrap();
+        (sess.clone(), tc, sess.root_conversation.clone())
+    }
+    async fn call_tool(sess: Arc<Session>, conv: &Arc<Conversation>, tc: &TurnContext, tool: &str, args: serde_json::Value) -> ResponseInputItem {
+        let mut tracker = TurnDiffTracker::new();
+        handle_function_call(sess, conv, tc, &mut tracker, "sub-test".to_string(), tool.to_string(), args.to_string(), "call-1".to_string()).await
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn conv_list_returns_conversations() {
+        let (sess, tc, root) = make_session().await;
+        let out = call_tool(sess.clone(), &root, &tc, "conv.list", serde_json::json!({})).await;
+        let ResponseInputItem::FunctionCallOutput { output, .. } = out else { panic!("expected FunctionCallOutput"); };
+        assert_eq!(output.success, Some(true));
+        let v: serde_json::Value = serde_json::from_str(&output.content).expect("valid json content");
+        let arr = v.get("conversations").and_then(|c| c.as_array()).expect("conversations array");
+        assert!(!arr.is_empty(), "expect at least root conversation to be listed");
+        let ts = arr[0].get("last_active_at").and_then(|s| s.as_str()).expect("timestamp");
+        chrono::DateTime::parse_from_rfc3339(ts).expect("RFC3339 timestamp");
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn conv_history_filters_messages_and_respects_limit() {
+        let (sess, tc, root) = make_session().await;
+        let items = vec![
+            ResponseItem::Message { id: None, role: "user".into(), content: vec![ContentItem::OutputText { text: "hi".into() }] },
+            ResponseItem::FunctionCall { id: None, name: "conv.list".into(), arguments: "{}".into(), call_id: "c1".into() },
+            ResponseItem::FunctionCallOutput { call_id: "c1".into(), output: FunctionCallOutputPayload { content: "{\"conversations\":[]}".into(), success: Some(true) } },
+            ResponseItem::Message { id: None, role: "assistant".into(), content: vec![ContentItem::OutputText { text: "ok".into() }] },
+        ];
+        sess.record_conversation_items_for(&root, &items).await;
+        let args = serde_json::json!({ "conversation_id": root.id.to_string(), "limit": 1usize });
+        let out = call_tool(sess.clone(), &root, &tc, "conv.history", args).await;
+        let ResponseInputItem::FunctionCallOutput { output, .. } = out else { panic!("expected FunctionCallOutput"); };
+        assert_eq!(output.success, Some(true));
+        let v: serde_json::Value = serde_json::from_str(&output.content).expect("valid json content");
+        let entries = v.get("entries").and_then(|e| e.as_array()).expect("entries array");
+        assert_eq!(entries.len(), 1);
+        let last = entries[0].get("text").and_then(|t| t.as_str()).unwrap();
+        assert_eq!(last, "ok");
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn conv_destroy_root_forbidden() {
+        let (sess, tc, root) = make_session().await;
+        let args = serde_json::json!({ "conversation_id": root.id.to_string() });
+        let out = call_tool(sess, &root, &tc, "conv.destroy", args).await;
+        let ResponseInputItem::FunctionCallOutput { output, .. } = out else { panic!("expected FunctionCallOutput"); };
+        assert_eq!(output.success, Some(false));
+        assert!(output.content.contains("cannot destroy root conversation"), "unexpected content: {}", output.content);
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn conv_create_missing_file_fails_without_enqueue() {
+        let (sess, tc, root) = make_session().await;
+        let args = serde_json::json!({ "base_instruction_file": "/path/does/not/exist.md", "user_instruction": "hello" });
+        let mut tracker = TurnDiffTracker::new();
+        let out = handle_function_call(sess.clone(), &root, &tc, &mut tracker, "sub-test".to_string(), "conv.create".to_string(), args.to_string(), "call-1".to_string()).await;
+        let ResponseInputItem::FunctionCallOutput { output, .. } = out else { panic!("expected FunctionCallOutput"); };
+        assert_eq!(output.success, Some(false));
+        assert!(output.content.contains("failed to read base_instruction_file"), "unexpected content: {}", output.content);
+        assert!(sess.pending_tasks.lock_unchecked().is_empty());
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn conv_send_requires_text_or_items() {
+        let (sess, tc, root) = make_session().await;
+        let args = serde_json::json!({ "conversation_id": root.id.to_string() });
+        let out = call_tool(sess, &root, &tc, "conv.send", args).await;
+        let ResponseInputItem::FunctionCallOutput { output, .. } = out else { panic!("expected FunctionCallOutput"); };
+        assert_eq!(output.success, Some(false));
+        assert!(output.content.contains("text or items required"), "unexpected content: {}", output.content);
+    }
+}
