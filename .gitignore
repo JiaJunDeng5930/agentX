@@ -83,3 +83,6 @@ CHANGELOG.ignore.md
 .envrc
 
 temp/
+
+# Ignore temp outputs
+tmp.out
