@@ -315,6 +315,25 @@ impl BottomPane {
         }
     }
 
+    /// Update the active conversation id short string in the status view (if active).
+    pub(crate) fn set_active_conv_id(&mut self, id: Option<uuid::Uuid>) {
+        // Only forward to the status indicator view when it is active. When a modal
+        // view (e.g., approvals) is active, the status indicator is hidden.
+        if let Some(mut view) = self.active_view.take() {
+            let short = id.map(|u| {
+                let s = u.as_simple().to_string();
+                let n = s.len().min(8);
+                s[..n].to_string()
+            });
+            view.update_conv_short_id(short);
+            self.active_view = Some(view);
+            if self.status_view_active {
+                self.request_redraw();
+            }
+        }
+    }
+
+
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.composer.is_empty()
     }

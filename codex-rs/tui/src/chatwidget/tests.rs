@@ -188,6 +188,7 @@ fn make_chatwidget_manual() -> (
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         show_welcome_banner: true,
         last_history_was_exec: false,
+        active_conv_id: None,
     };
     (widget, rx, op_rx)
 }

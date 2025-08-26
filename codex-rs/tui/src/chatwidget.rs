@@ -111,6 +111,8 @@ pub(crate) struct ChatWidget {
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
     last_history_was_exec: bool,
+    // Currently active conversation id for the running task (if any)
+    active_conv_id: Option<Uuid>,
 }
 
 struct UserMessage {
@@ -593,6 +595,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             session_id: None,
+            active_conv_id: None,
             last_history_was_exec: false,
             show_welcome_banner: true,
         }
@@ -638,6 +641,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             session_id: None,
+            active_conv_id: None,
             last_history_was_exec: false,
             show_welcome_banner: false,
         }
@@ -878,8 +882,17 @@ impl ChatWidget {
                 self.on_agent_reasoning_final()
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TaskStarted => self.on_task_started(),
-            EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
+            EventMsg::TaskStarted => {
+                // Start status view, then show conv id so the widget is present.
+                self.on_task_started();
+                self.active_conv_id = event.conversation_id;
+                self.bottom_pane.set_active_conv_id(self.active_conv_id);
+            },
+            EventMsg::TaskComplete(TaskCompleteEvent { .. }) => {
+                self.on_task_complete();
+                self.active_conv_id = None;
+                self.bottom_pane.set_active_conv_id(None);
+            },
             EventMsg::TokenCount(token_usage) => self.on_token_count(token_usage),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
@@ -887,7 +900,11 @@ impl ChatWidget {
                     self.on_error("Tell the model what to do differently".to_owned())
                 }
                 TurnAbortReason::Replaced => {
-                    self.on_error("Turn aborted: replaced by a new task".to_owned())
+                    // Show a lightweight hint in the status indicator rather than logging an error cell.
+                    self.bottom_pane.update_status_text("当前任务被 conv.* 工具替换，正在运行目标会话，随后承接原逻辑".to_string());
+                    // Clear local active id until next TaskStarted arrives
+                    self.active_conv_id = None;
+                    self.bottom_pane.set_active_conv_id(None);
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),

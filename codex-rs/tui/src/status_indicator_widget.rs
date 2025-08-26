@@ -43,6 +43,8 @@ pub(crate) struct StatusIndicatorWidget {
     start_time: Instant,
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
+    /// Optional short conversation id (e.g., 8-char uuid) for display
+    conv_short: Option<String>,
 }
 
 impl StatusIndicatorWidget {
@@ -57,6 +59,7 @@ impl StatusIndicatorWidget {
 
             app_event_tx,
             frame_requester,
+            conv_short: None,
         }
     }
 
@@ -103,6 +106,11 @@ impl StatusIndicatorWidget {
         if self.header != header {
             self.header = header;
         }
+    }
+
+    /// Update the short-form conversation id to be displayed.
+    pub(crate) fn update_conv_short(&mut self, short_id: Option<String>) {
+        self.conv_short = short_id;
     }
 
     /// Reset the animation and start revealing `text` from the beginning.
@@ -197,6 +205,17 @@ impl WidgetRef for StatusIndicatorWidget {
             " to interrupt)",
             Style::default().add_modifier(Modifier::DIM),
         ));
+        // Optional: show current conversation id (short) after the bracket block
+        if let Some(short) = &self.conv_short {
+            spans.push(Span::styled(
+                " ",
+                Style::default().add_modifier(Modifier::DIM),
+            ));
+            spans.push(Span::styled(
+                format!("conv {short}"),
+                Style::default().add_modifier(Modifier::DIM),
+            ));
+        }
         // Add a space and then the log text (not animated by the gradient)
         if !status_prefix.is_empty() {
             spans.push(Span::styled(

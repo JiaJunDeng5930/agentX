@@ -56,4 +56,8 @@ impl BottomPaneView for StatusIndicatorView {
     fn update_status_text(&mut self, text: String) {
         self.update_text(text);
     }
+
+    fn update_conv_short_id(&mut self, short_id: Option<String>) {
+        self.view.update_conv_short(short_id);
+    }
 }
