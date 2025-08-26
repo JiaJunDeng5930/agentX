@@ -745,6 +745,25 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
+            SlashCommand::ConvList => {
+                self.app_event_tx.send(AppEvent::CodexOp(Op::ConvList));
+            }
+            SlashCommand::ConvHistory => {
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::ConvHistory { conversation_id: None, limit: None }));
+            }
+            SlashCommand::ConvCreate => {
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::ConvCreate { base_instruction_text: None, base_instruction_file: None, user_instruction: None }));
+            }
+            SlashCommand::ConvSend => {
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::ConvSend { conversation_id: None, text: None }));
+            }
+            SlashCommand::ConvDestroy => {
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(Op::ConvDestroy { conversation_id: None }));
+            }
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => {
                 use codex_core::protocol::EventMsg;

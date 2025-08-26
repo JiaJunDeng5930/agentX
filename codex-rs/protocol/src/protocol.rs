@@ -78,6 +78,37 @@ pub enum Op {
         summary: ReasoningSummaryConfig,
     },
 
+    /// Manage conversations directly (TUI slash commands). These mirror the conv_* tools.
+    /// If optional fields are omitted, sensible defaults are applied:
+    /// - For IDs: choose the most recently active non-root conversation (if any), otherwise root.
+    /// - For text/items: an empty text item will be injected.
+    ConvCreate {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base_instruction_text: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base_instruction_file: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        user_instruction: Option<String>,
+    },
+    ConvSend {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+    },
+    ConvList,
+    ConvHistory {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        limit: Option<usize>,
+    },
+    ConvDestroy {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation_id: Option<String>,
+    },
+
+
     /// Override parts of the persistent turn context for subsequent turns.
     ///
     /// All fields are optional; when omitted, the existing value is preserved.

@@ -23,6 +23,12 @@ pub enum SlashCommand {
     Mcp,
     Logout,
     Quit,
+    // Conversation management (mirror conv_* tools without involving the model)
+    ConvList,
+    ConvHistory,
+    ConvCreate,
+    ConvSend,
+    ConvDestroy,
     #[cfg(debug_assertions)]
     TestApproval,
 }
@@ -42,6 +48,11 @@ impl SlashCommand {
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
+            SlashCommand::ConvList => "list conversations in this session",
+            SlashCommand::ConvHistory => "show conversation messages (current by default)",
+            SlashCommand::ConvCreate => "create a new conversation and run one turn",
+            SlashCommand::ConvSend => "send a message to an existing conversation",
+            SlashCommand::ConvDestroy => "destroy the most recent non-root conversation",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",
         }

@@ -1755,7 +1755,6 @@ async fn submission_loop(
             Op::ListMcpTools => {
                 let tx_event = sess.tx_event.clone();
                 let sub_id = sub.id.clone();
-
                 // This is a cheap lookup from the connection manager's cache.
                 let tools = sess.mcp_connection_manager.list_all_tools();
                 let event = Event {
@@ -1770,7 +1769,94 @@ async fn submission_loop(
                     warn!("failed to send McpListToolsResponse event: {e}");
                 }
             }
-            Op::Compact => {
+            Op::ConvList => {
+                #[derive(Serialize)]
+                struct ConvEntry { id: String, message_count: usize, last_active_at: String }
+                #[derive(Serialize)]
+                struct ListPayload { conversations: Vec<ConvEntry> }
+                let mut entries = Vec::new();
+                let mut push_entry = |c: &Arc<Conversation>| {
+                    let items = c.state.lock_unchecked().history.contents();
+                    let msg_count = items.iter().filter(|it| matches!(it, ResponseItem::Message { .. })).count();
+                    let ts = *c.last_active_at.lock_unchecked();
+                    let dt: chrono::DateTime<chrono::Utc> = chrono::DateTime::<chrono::Utc>::from(ts);
+                    entries.push(ConvEntry { id: c.id.to_string(), message_count: msg_count, last_active_at: dt.to_rfc3339() });
+                };
+                push_entry(&sess.root_conversation);
+                if let Ok(map) = sess.conversations.read() {
+                    for (id, c) in map.iter() { if *id != sess.root_conversation_id() { push_entry(c); } }
+                }
+                let payload = ListPayload { conversations: entries };
+                let msg = serde_json::to_string(&payload).unwrap_or_else(|e| format!("{e}"));
+                let ev = Event { id: sub.id, conversation_id: Some(sess.root_conversation_id()), task_id: sess.current_task_id(), msg: EventMsg::BackgroundEvent(BackgroundEventEvent { message: msg }) };
+                if let Err(e) = sess.tx_event.send(ev).await { warn!("failed to send conv_list: {e}"); }
+            }
+            Op::ConvHistory { conversation_id, limit } => {
+                let target_id = if let Some(cid) = conversation_id.and_then(|s| Uuid::parse_str(&s).ok()) { cid } else { sess.root_conversation_id() };
+                let target_opt = if target_id == sess.root_conversation_id() { Some(sess.root_conversation.clone()) } else { sess.conversations.read().ok().and_then(|m| m.get(&target_id).cloned()) };
+                if let Some(target) = target_opt {
+                    #[derive(Serialize)] struct Attachment { r#type: String, image_url: String }
+                    #[derive(Serialize)] struct Entry { role: String, #[serde(skip_serializing_if = "Option::is_none")] text: Option<String>, #[serde(skip_serializing_if = "Vec::is_empty")] attachments: Vec<Attachment> }
+                    #[derive(Serialize)] struct HistoryPayload { entries: Vec<Entry> }
+                    let mut messages: Vec<ResponseItem> = target.state.lock_unchecked().history.contents().into_iter().filter(|it| matches!(it, ResponseItem::Message { .. })).collect();
+                    if let Some(lim) = limit { if messages.len() > lim { messages = messages.split_off(messages.len() - lim); } }
+                    let mut entries = Vec::new();
+                    for msg in messages { if let ResponseItem::Message { role, content, .. } = msg { let mut text_acc: Vec<String> = Vec::new(); let mut atts = Vec::new(); for ci in content { match ci { ContentItem::OutputText { text } | ContentItem::InputText { text } => text_acc.push(text), ContentItem::InputImage { image_url } => atts.push(Attachment { r#type: "image".into(), image_url }), } } let text = if text_acc.is_empty() { None } else { Some(text_acc.join("") )}; entries.push(Entry { role, text, attachments: atts }); } }
+                    let payload = HistoryPayload { entries };
+                    let msg = serde_json::to_string(&payload).unwrap_or_else(|e| format!("{e}"));
+                    let ev = Event { id: sub.id, conversation_id: Some(target_id), task_id: sess.current_task_id(), msg: EventMsg::BackgroundEvent(BackgroundEventEvent { message: msg }) };
+                    if let Err(e) = sess.tx_event.send(ev).await { warn!("failed to send conv_history: {e}"); }
+                } else {
+                    let ev = Event { id: sub.id, conversation_id: Some(sess.root_conversation_id()), task_id: sess.current_task_id(), msg: EventMsg::Error(ErrorEvent { message: "conversation not found".to_string() }) };
+                    if let Err(e) = sess.tx_event.send(ev).await { warn!("failed to send conv_history error: {e}"); }
+                }
+            }
+            Op::ConvDestroy { conversation_id } => {
+                // pick id: provided or most recent non-root
+                let pick_recent = || {
+                    let mut best: Option<(Uuid, std::time::SystemTime)> = None;
+                    if let Ok(map) = sess.conversations.read() {
+                        for (id, c) in map.iter() { if *id != sess.root_conversation_id() { let ts=*c.last_active_at.lock_unchecked(); if best.as_ref().map(|b| ts>b.1).unwrap_or(true) { best=Some((*id, ts)); } } }
+                    }
+                    best.map(|b| b.0)
+                };
+                let id = conversation_id.and_then(|s| Uuid::parse_str(&s).ok()).or_else(pick_recent);
+                match id { Some(id) if id != sess.root_conversation_id() => { sess.close_conversation(id); let ev = Event { id: sub.id, conversation_id: Some(id), task_id: sess.current_task_id(), msg: EventMsg::BackgroundEvent(BackgroundEventEvent { message: format!("{id} destroyed") }) }; let _=sess.tx_event.send(ev).await; } _ => { let ev = Event { id: sub.id, conversation_id: Some(sess.root_conversation_id()), task_id: sess.current_task_id(), msg: EventMsg::Error(ErrorEvent { message: "cannot destroy root conversation or none available".to_string() }) }; let _=sess.tx_event.send(ev).await; } }
+            }
+            Op::ConvCreate { base_instruction_text, base_instruction_file, user_instruction } => {
+                // resolve base override
+                let mut base_override = base_instruction_text;
+                if base_override.is_none() { if let Some(path) = base_instruction_file { let resolved = turn_context.resolve_path(Some(path)); match std::fs::read_to_string(&resolved) { Ok(s) => base_override = Some(s), Err(e) => { let _=sess.tx_event.send(Event{ id: sub.id, conversation_id: Some(sess.root_conversation_id()), task_id: sess.current_task_id(), msg: EventMsg::Error(ErrorEvent{ message: format!("failed to read base_instruction_file: {e}")})}).await; continue; } } } }
+                let target_id = sess.open_conversation_with(base_override, None, None, None);
+                // Build items
+                let mut items: Vec<InputItem> = Vec::new();
+                if let Some(text) = user_instruction { items.push(InputItem::Text { text }); }
+                // Replace current task and enqueue target conversation
+                sess.abort_current_and_enqueue(vec![ TaskPlan { conversation_id: target_id, input_items: items, base_instructions_override: None, closure: None }, ]);
+                Session::maybe_start_next_task_arc(&sess, &turn_context);
+                let _ = sess.tx_event.send(Event{ id: sub.id, conversation_id: Some(target_id), task_id: sess.current_task_id(), msg: EventMsg::BackgroundEvent(BackgroundEventEvent{ message: format!("conv_create scheduled: {target_id}") })}).await;
+            }
+            Op::ConvSend { conversation_id, text } => {
+                // pick target conv
+                let pick_recent = || {
+                    let mut best: Option<(Uuid, std::time::SystemTime)> = None;
+                    if let Ok(map) = sess.conversations.read() { for (id, c) in map.iter() { if *id != sess.root_conversation_id() { let ts=*c.last_active_at.lock_unchecked(); if best.as_ref().map(|b| ts>b.1).unwrap_or(true) { best=Some((*id, ts)); } } } }
+                    best.map(|b| b.0)
+                };
+                let target_id = conversation_id.and_then(|s| Uuid::parse_str(&s).ok()).or_else(pick_recent).unwrap_or_else(|| sess.root_conversation_id());
+                // Build items
+                let mut items: Vec<InputItem> = Vec::new();
+                if let Some(t) = text { items.push(InputItem::Text { text: t }); }
+                // Replace and enqueue target
+                if sess.get_conversation_by_id(target_id).is_some() {
+                    sess.abort_current_and_enqueue(vec![ TaskPlan { conversation_id: target_id, input_items: items, base_instructions_override: None, closure: None } ]);
+                    Session::maybe_start_next_task_arc(&sess, &turn_context);
+                    let _ = sess.tx_event.send(Event{ id: sub.id, conversation_id: Some(target_id), task_id: sess.current_task_id(), msg: EventMsg::BackgroundEvent(BackgroundEventEvent{ message: format!("conv_send scheduled: {target_id}") })}).await;
+                } else {
+                    let _ = sess.tx_event.send(Event{ id: sub.id, conversation_id: Some(sess.root_conversation_id()), task_id: sess.current_task_id(), msg: EventMsg::Error(ErrorEvent{ message: "conversation not found".to_string() })}).await;
+                }
+            }
+Op::Compact => {
                 // Create a summarization request as user input
                 const SUMMARIZATION_PROMPT: &str = include_str!("prompt_for_compact_command.md");
 
