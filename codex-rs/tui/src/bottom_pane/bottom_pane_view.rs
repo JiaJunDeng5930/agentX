@@ -55,4 +55,3 @@ pub(crate) trait BottomPaneView {
     /// shown in the status indicator while a task is running.
     fn update_conv_short_id(&mut self, _short_id: Option<String>) {}
 }
-

@@ -76,6 +76,10 @@ enum Subcommand {
     /// Internal: generate TypeScript protocol bindings.
     #[clap(hide = true)]
     GenerateTs(GenerateTsCommand),
+
+    /// Invoke a conv.* tool directly (testing/diagnostics).
+    #[clap(hide = true)]
+    Conv(ConvCli),
 }
 
 #[derive(Debug, Parser)]
@@ -212,6 +216,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::GenerateTs(gen_cli)) => {
             codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
         }
+        Some(Subcommand::Conv(mut conv_cli)) => {
+            prepend_config_flags(&mut conv_cli.config_overrides, cli.config_overrides);
+            run_conv_command(conv_cli).await?;
+        }
     }
 
     Ok(())
@@ -232,4 +240,39 @@ fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
     let name = "codex";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
+}
+
+#[derive(Debug, Parser)]
+struct ConvCli {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+
+    /// Tool name (e.g., conv_list, conv_history, conv_create, conv_send, conv_destroy)
+    #[arg(long = "name")]
+    name: String,
+
+    /// JSON string of arguments for the tool
+    #[arg(long = "args", default_value = "{}")]
+    args: String,
+}
+
+async fn run_conv_command(cli: ConvCli) -> anyhow::Result<()> {
+    use codex_core::config::Config;
+    use codex_core::config::ConfigOverrides;
+    use codex_core::protocol::AskForApproval;
+
+    // Default to headless approval/sandbox similar to exec.
+    let overrides = ConfigOverrides {
+        approval_policy: Some(AskForApproval::Never),
+        ..Default::default()
+    };
+    let cli_kv_overrides = cli
+        .config_overrides
+        .parse_overrides()
+        .map_err(|e| anyhow::anyhow!("Error parsing -c overrides: {e}"))?;
+    let cfg = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+
+    let payload = codex_core::invoke_conv_tool_for_cli(cfg, cli.name, cli.args).await?;
+    println!("{}", payload.content);
+    Ok(())
 }

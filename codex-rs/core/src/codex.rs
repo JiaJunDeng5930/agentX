@@ -12,6 +12,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use std::time::Instant;
 
+use anyhow;
 use async_channel::Receiver;
 use async_channel::Sender;
 use chrono;
@@ -2693,7 +2694,7 @@ async fn handle_function_call(
     call_id: String,
 ) -> ResponseInputItem {
     match name.as_str() {
-        "conv.list" => {
+        "conv_list" => {
             // Collect conversations
             #[derive(Serialize)]
             struct ConvEntry {
@@ -2742,7 +2743,7 @@ async fn handle_function_call(
                 },
             }
         }
-        "conv.history" => {
+        "conv_history" => {
             #[derive(serde::Deserialize)]
             struct Args {
                 conversation_id: String,
@@ -2858,7 +2859,7 @@ async fn handle_function_call(
                 },
             }
         }
-        "conv.destroy" => {
+        "conv_destroy" => {
             #[derive(serde::Deserialize)]
             struct Args {
                 conversation_id: String,
@@ -2903,7 +2904,7 @@ async fn handle_function_call(
                 },
             }
         }
-        "conv.create" => {
+        "conv_create" => {
             #[derive(serde::Deserialize)]
             struct Args {
                 #[serde(default)]
@@ -3046,7 +3047,7 @@ async fn handle_function_call(
                 },
             }
         }
-        "conv.send" => {
+        "conv_send" => {
             #[derive(serde::Deserialize)]
             struct Args {
                 conversation_id: String,
@@ -4360,14 +4361,14 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod conv_tools_tests {
     use super::*;
+    
     use codex_login::AuthManager;
     use tempfile::TempDir;
-    use tokio::sync::mpsc;
-    use uuid::Uuid;
+    
+    
     async fn make_session() -> (Arc<Session>, TurnContext, Arc<Conversation>) {
         let (tx_event, _rx_event) = async_channel::bounded::<Event>(64);
         let provider = crate::model_provider_info::built_in_model_providers()
@@ -4396,42 +4397,100 @@ mod conv_tools_tests {
             cwd: cfg.cwd.clone(),
             resume_path: None,
         };
-        let auth = Arc::new(AuthManager::new(cfg.codex_home.clone(), cfg.preferred_auth_method));
-        let (sess, tc) = Session::new(configure_session, cfg.clone(), auth, tx_event, None).await.unwrap();
+        let auth = Arc::new(AuthManager::new(
+            cfg.codex_home.clone(),
+            cfg.preferred_auth_method,
+        ));
+        let (sess, tc) = Session::new(configure_session, cfg.clone(), auth, tx_event, None)
+            .await
+            .unwrap();
         (sess.clone(), tc, sess.root_conversation.clone())
     }
-    async fn call_tool(sess: Arc<Session>, conv: &Arc<Conversation>, tc: &TurnContext, tool: &str, args: serde_json::Value) -> ResponseInputItem {
+    async fn call_tool(
+        sess: Arc<Session>,
+        conv: &Arc<Conversation>,
+        tc: &TurnContext,
+        tool: &str,
+        args: serde_json::Value,
+    ) -> ResponseInputItem {
         let mut tracker = TurnDiffTracker::new();
-        handle_function_call(sess, conv, tc, &mut tracker, "sub-test".to_string(), tool.to_string(), args.to_string(), "call-1".to_string()).await
+        handle_function_call(
+            sess,
+            conv,
+            tc,
+            &mut tracker,
+            "sub-test".to_string(),
+            tool.to_string(),
+            args.to_string(),
+            "call-1".to_string(),
+        )
+        .await
     }
     #[tokio::test(flavor = "current_thread")]
     async fn conv_list_returns_conversations() {
         let (sess, tc, root) = make_session().await;
-        let out = call_tool(sess.clone(), &root, &tc, "conv.list", serde_json::json!({})).await;
-        let ResponseInputItem::FunctionCallOutput { output, .. } = out else { panic!("expected FunctionCallOutput"); };
+        let out = call_tool(sess.clone(), &root, &tc, "conv_list", serde_json::json!({})).await;
+        let ResponseInputItem::FunctionCallOutput { output, .. } = out else {
+            panic!("expected FunctionCallOutput");
+        };
         assert_eq!(output.success, Some(true));
-        let v: serde_json::Value = serde_json::from_str(&output.content).expect("valid json content");
-        let arr = v.get("conversations").and_then(|c| c.as_array()).expect("conversations array");
-        assert!(!arr.is_empty(), "expect at least root conversation to be listed");
-        let ts = arr[0].get("last_active_at").and_then(|s| s.as_str()).expect("timestamp");
+        let v: serde_json::Value =
+            serde_json::from_str(&output.content).expect("valid json content");
+        let arr = v
+            .get("conversations")
+            .and_then(|c| c.as_array())
+            .expect("conversations array");
+        assert!(
+            !arr.is_empty(),
+            "expect at least root conversation to be listed"
+        );
+        let ts = arr[0]
+            .get("last_active_at")
+            .and_then(|s| s.as_str())
+            .expect("timestamp");
         chrono::DateTime::parse_from_rfc3339(ts).expect("RFC3339 timestamp");
     }
     #[tokio::test(flavor = "current_thread")]
     async fn conv_history_filters_messages_and_respects_limit() {
         let (sess, tc, root) = make_session().await;
         let items = vec![
-            ResponseItem::Message { id: None, role: "user".into(), content: vec![ContentItem::OutputText { text: "hi".into() }] },
-            ResponseItem::FunctionCall { id: None, name: "conv.list".into(), arguments: "{}".into(), call_id: "c1".into() },
-            ResponseItem::FunctionCallOutput { call_id: "c1".into(), output: FunctionCallOutputPayload { content: "{\"conversations\":[]}".into(), success: Some(true) } },
-            ResponseItem::Message { id: None, role: "assistant".into(), content: vec![ContentItem::OutputText { text: "ok".into() }] },
+            ResponseItem::Message {
+                id: None,
+                role: "user".into(),
+                content: vec![ContentItem::OutputText { text: "hi".into() }],
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "conv_list".into(),
+                arguments: "{}".into(),
+                call_id: "c1".into(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "c1".into(),
+                output: FunctionCallOutputPayload {
+                    content: "{\"conversations\":[]}".into(),
+                    success: Some(true),
+                },
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".into(),
+                content: vec![ContentItem::OutputText { text: "ok".into() }],
+            },
         ];
         sess.record_conversation_items_for(&root, &items).await;
         let args = serde_json::json!({ "conversation_id": root.id.to_string(), "limit": 1usize });
-        let out = call_tool(sess.clone(), &root, &tc, "conv.history", args).await;
-        let ResponseInputItem::FunctionCallOutput { output, .. } = out else { panic!("expected FunctionCallOutput"); };
+        let out = call_tool(sess.clone(), &root, &tc, "conv_history", args).await;
+        let ResponseInputItem::FunctionCallOutput { output, .. } = out else {
+            panic!("expected FunctionCallOutput");
+        };
         assert_eq!(output.success, Some(true));
-        let v: serde_json::Value = serde_json::from_str(&output.content).expect("valid json content");
-        let entries = v.get("entries").and_then(|e| e.as_array()).expect("entries array");
+        let v: serde_json::Value =
+            serde_json::from_str(&output.content).expect("valid json content");
+        let entries = v
+            .get("entries")
+            .and_then(|e| e.as_array())
+            .expect("entries array");
         assert_eq!(entries.len(), 1);
         let last = entries[0].get("text").and_then(|t| t.as_str()).unwrap();
         assert_eq!(last, "ok");
@@ -4440,29 +4499,131 @@ mod conv_tools_tests {
     async fn conv_destroy_root_forbidden() {
         let (sess, tc, root) = make_session().await;
         let args = serde_json::json!({ "conversation_id": root.id.to_string() });
-        let out = call_tool(sess, &root, &tc, "conv.destroy", args).await;
-        let ResponseInputItem::FunctionCallOutput { output, .. } = out else { panic!("expected FunctionCallOutput"); };
+        let out = call_tool(sess, &root, &tc, "conv_destroy", args).await;
+        let ResponseInputItem::FunctionCallOutput { output, .. } = out else {
+            panic!("expected FunctionCallOutput");
+        };
         assert_eq!(output.success, Some(false));
-        assert!(output.content.contains("cannot destroy root conversation"), "unexpected content: {}", output.content);
+        assert!(
+            output.content.contains("cannot destroy root conversation"),
+            "unexpected content: {}",
+            output.content
+        );
     }
     #[tokio::test(flavor = "current_thread")]
     async fn conv_create_missing_file_fails_without_enqueue() {
         let (sess, tc, root) = make_session().await;
         let args = serde_json::json!({ "base_instruction_file": "/path/does/not/exist.md", "user_instruction": "hello" });
         let mut tracker = TurnDiffTracker::new();
-        let out = handle_function_call(sess.clone(), &root, &tc, &mut tracker, "sub-test".to_string(), "conv.create".to_string(), args.to_string(), "call-1".to_string()).await;
-        let ResponseInputItem::FunctionCallOutput { output, .. } = out else { panic!("expected FunctionCallOutput"); };
+        let out = handle_function_call(
+            sess.clone(),
+            &root,
+            &tc,
+            &mut tracker,
+            "sub-test".to_string(),
+            "conv_create".to_string(),
+            args.to_string(),
+            "call-1".to_string(),
+        )
+        .await;
+        let ResponseInputItem::FunctionCallOutput { output, .. } = out else {
+            panic!("expected FunctionCallOutput");
+        };
         assert_eq!(output.success, Some(false));
-        assert!(output.content.contains("failed to read base_instruction_file"), "unexpected content: {}", output.content);
+        assert!(
+            output
+                .content
+                .contains("failed to read base_instruction_file"),
+            "unexpected content: {}",
+            output.content
+        );
         assert!(sess.pending_tasks.lock_unchecked().is_empty());
     }
     #[tokio::test(flavor = "current_thread")]
     async fn conv_send_requires_text_or_items() {
         let (sess, tc, root) = make_session().await;
         let args = serde_json::json!({ "conversation_id": root.id.to_string() });
-        let out = call_tool(sess, &root, &tc, "conv.send", args).await;
-        let ResponseInputItem::FunctionCallOutput { output, .. } = out else { panic!("expected FunctionCallOutput"); };
+        let out = call_tool(sess, &root, &tc, "conv_send", args).await;
+        let ResponseInputItem::FunctionCallOutput { output, .. } = out else {
+            panic!("expected FunctionCallOutput");
+        };
         assert_eq!(output.success, Some(false));
-        assert!(output.content.contains("text or items required"), "unexpected content: {}", output.content);
+        assert!(
+            output.content.contains("text or items required"),
+            "unexpected content: {}",
+            output.content
+        );
+    }
+}
+
+/// Public helper: invoke a `conv.*` tool programmatically using a fresh in‑memory session.
+///
+/// This is intended for CLI/testing so that conv tools can be exercised without
+/// requiring a live model to issue the function call.
+pub async fn invoke_conv_tool_for_cli(
+    cfg: crate::config::Config,
+    tool_name: String,
+    args_json: String,
+) -> anyhow::Result<FunctionCallOutputPayload> {
+    let cfg = Arc::new(cfg);
+    let provider = cfg.model_provider.clone();
+    let (tx_event, _rx_event) = async_channel::bounded::<Event>(8);
+    let auth = Arc::new(AuthManager::new(
+        cfg.codex_home.clone(),
+        cfg.preferred_auth_method,
+    ));
+
+    let (sess, turn_context) = Session::new(
+        ConfigureSession {
+            provider,
+            model: cfg.model.clone(),
+            model_reasoning_effort: cfg.model_reasoning_effort,
+            model_reasoning_summary: cfg.model_reasoning_summary,
+            user_instructions: cfg.user_instructions.clone(),
+            base_instructions: cfg.base_instructions.clone(),
+            approval_policy: cfg.approval_policy,
+            sandbox_policy: cfg.sandbox_policy.clone(),
+            disable_response_storage: cfg.disable_response_storage,
+            notify: cfg.notify.clone(),
+            cwd: cfg.cwd.clone(),
+            resume_path: None,
+        },
+        cfg.clone(),
+        auth,
+        tx_event,
+        None,
+    )
+    .await?;
+
+    let mut diff = TurnDiffTracker::new();
+    let out = handle_function_call(
+        sess.clone(),
+        &sess.root_conversation,
+        &TurnContext {
+            client: turn_context.client.clone(),
+            cwd: turn_context.cwd.clone(),
+            approval_policy: turn_context.approval_policy,
+            sandbox_policy: turn_context.sandbox_policy.clone(),
+            shell_environment_policy: turn_context.shell_environment_policy.clone(),
+            storage_policy: turn_context.storage_policy.clone(),
+        },
+        &mut diff,
+        "conv-cli".to_string(),
+        tool_name,
+        args_json,
+        "cli-call-1".to_string(),
+    )
+    .await;
+    if let ResponseInputItem::FunctionCallOutput { output, .. } = out.clone() {
+        // Record the tool output in the root conversation history for logging.
+        let item = ResponseItem::FunctionCallOutput {
+            call_id: "conv-cli".to_string(),
+            output: output.clone(),
+        };
+        sess.record_conversation_items_for(&sess.root_conversation, &[item])
+            .await;
+        Ok(output)
+    } else {
+        Err(anyhow::anyhow!("unexpected tool response"))
     }
 }

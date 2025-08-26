@@ -496,7 +496,7 @@ pub(crate) fn get_openai_tools(
     //    conv.* (optional) -> shell/local_shell -> update_plan (optional) -> apply_patch (optional)
     let mut tools: Vec<OpenAiTool> = Vec::new();
     // Conversation tools: fixed order
-    // conv.create
+    // conv_create
     if config.include_conv_tools {
         {
             let mut properties = BTreeMap::new();
@@ -589,7 +589,7 @@ pub(crate) fn get_openai_tools(
                 },
             );
             tools.push(OpenAiTool::Function(ResponsesApiTool {
-            name: "conv.create".to_string(),
+            name: "conv_create".to_string(),
             description: "Create a new conversation (interrupts current task); schedules target conversation task then resumes original with tool output".to_string(),
             strict: false,
             parameters: JsonSchema::Object {
@@ -599,7 +599,7 @@ pub(crate) fn get_openai_tools(
             },
         }));
         }
-        // conv.send
+        // conv_send
         {
             let mut properties = BTreeMap::new();
             properties.insert(
@@ -626,7 +626,7 @@ pub(crate) fn get_openai_tools(
                 },
             );
             tools.push(OpenAiTool::Function(ResponsesApiTool {
-            name: "conv.send".to_string(),
+            name: "conv_send".to_string(),
             description: "Send a message to an existing conversation (interrupts current task); schedules target conversation task then resumes original with tool output".to_string(),
             strict: false,
             parameters: JsonSchema::Object {
@@ -636,9 +636,9 @@ pub(crate) fn get_openai_tools(
             },
         }));
         }
-        // conv.list
+        // conv_list
         tools.push(OpenAiTool::Function(ResponsesApiTool {
-            name: "conv.list".to_string(),
+            name: "conv_list".to_string(),
             description: "List all conversations in the current session (non‑interrupting)"
                 .to_string(),
             strict: false,
@@ -648,7 +648,7 @@ pub(crate) fn get_openai_tools(
                 additional_properties: Some(false),
             },
         }));
-        // conv.history
+        // conv_history
         {
             let mut properties = BTreeMap::new();
             properties.insert(
@@ -664,7 +664,7 @@ pub(crate) fn get_openai_tools(
                 },
             );
             tools.push(OpenAiTool::Function(ResponsesApiTool {
-                name: "conv.history".to_string(),
+                name: "conv_history".to_string(),
                 description: "Return message history for a conversation (non‑interrupting)"
                     .to_string(),
                 strict: false,
@@ -675,7 +675,7 @@ pub(crate) fn get_openai_tools(
                 },
             }));
         }
-        // conv.destroy
+        // conv_destroy
         {
             let mut properties = BTreeMap::new();
             properties.insert(
@@ -685,7 +685,7 @@ pub(crate) fn get_openai_tools(
                 },
             );
             tools.push(OpenAiTool::Function(ResponsesApiTool {
-            name: "conv.destroy".to_string(),
+            name: "conv_destroy".to_string(),
             description:
                 "Destroy a conversation (non‑interrupting; cannot destroy the root conversation)"
                     .to_string(),
@@ -829,11 +829,11 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "conv.create",
-                "conv.send",
-                "conv.list",
-                "conv.history",
-                "conv.destroy",
+                "conv_create",
+                "conv_send",
+                "conv_list",
+                "conv_history",
+                "conv_destroy",
                 "local_shell",
                 "update_plan",
                 "web_search",
@@ -859,11 +859,11 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "conv.create",
-                "conv.send",
-                "conv.list",
-                "conv.history",
-                "conv.destroy",
+                "conv_create",
+                "conv_send",
+                "conv_list",
+                "conv_history",
+                "conv_destroy",
                 "shell",
                 "update_plan",
                 "web_search",
@@ -925,11 +925,11 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "conv.create",
-                "conv.send",
-                "conv.list",
-                "conv.history",
-                "conv.destroy",
+                "conv_create",
+                "conv_send",
+                "conv_list",
+                "conv_history",
+                "conv_destroy",
                 "shell",
                 "web_search",
                 "test_server/do_something_cool",
@@ -1020,11 +1020,11 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "conv.create",
-                "conv.send",
-                "conv.list",
-                "conv.history",
-                "conv.destroy",
+                "conv_create",
+                "conv_send",
+                "conv_list",
+                "conv_history",
+                "conv_destroy",
                 "shell",
                 "web_search",
                 "dash/search",
@@ -1089,11 +1089,11 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "conv.create",
-                "conv.send",
-                "conv.list",
-                "conv.history",
-                "conv.destroy",
+                "conv_create",
+                "conv_send",
+                "conv_list",
+                "conv_history",
+                "conv_destroy",
                 "shell",
                 "web_search",
                 "dash/paginate",
@@ -1155,11 +1155,11 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "conv.create",
-                "conv.send",
-                "conv.list",
-                "conv.history",
-                "conv.destroy",
+                "conv_create",
+                "conv_send",
+                "conv_list",
+                "conv_history",
+                "conv_destroy",
                 "shell",
                 "web_search",
                 "dash/tags",
@@ -1224,11 +1224,11 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "conv.create",
-                "conv.send",
-                "conv.list",
-                "conv.history",
-                "conv.destroy",
+                "conv_create",
+                "conv_send",
+                "conv_list",
+                "conv_history",
+                "conv_destroy",
                 "shell",
                 "web_search",
                 "dash/value",

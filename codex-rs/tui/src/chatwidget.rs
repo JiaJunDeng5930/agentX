@@ -887,12 +887,12 @@ impl ChatWidget {
                 self.on_task_started();
                 self.active_conv_id = event.conversation_id;
                 self.bottom_pane.set_active_conv_id(self.active_conv_id);
-            },
+            }
             EventMsg::TaskComplete(TaskCompleteEvent { .. }) => {
                 self.on_task_complete();
                 self.active_conv_id = None;
                 self.bottom_pane.set_active_conv_id(None);
-            },
+            }
             EventMsg::TokenCount(token_usage) => self.on_token_count(token_usage),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
@@ -901,7 +901,9 @@ impl ChatWidget {
                 }
                 TurnAbortReason::Replaced => {
                     // Show a lightweight hint in the status indicator rather than logging an error cell.
-                    self.bottom_pane.update_status_text("当前任务被 conv.* 工具替换，正在运行目标会话，随后承接原逻辑".to_string());
+                    self.bottom_pane.update_status_text(
+                        "当前任务被 conv.* 工具替换，正在运行目标会话，随后承接原逻辑".to_string(),
+                    );
                     // Clear local active id until next TaskStarted arrives
                     self.active_conv_id = None;
                     self.bottom_pane.set_active_conv_id(None);
