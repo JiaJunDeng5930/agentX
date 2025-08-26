@@ -1304,10 +1304,16 @@ impl Session {
             && let Some(last) =
                 sess.get_last_assistant_message_for_conv(closure.msg_from_conversation)
         {
+            // 将返回值包装为 JSON：{ conversation_id, last_assistant_message }
+            let payload = serde_json::json!({
+                "conversation_id": closure.msg_from_conversation.to_string(),
+                "last_assistant_message": last,
+            })
+            .to_string();
             let item = ResponseInputItem::FunctionCallOutput {
                 call_id: closure.call_id.clone(),
                 output: FunctionCallOutputPayload {
-                    content: last,
+                    content: payload,
                     success: Some(true),
                 },
             };
