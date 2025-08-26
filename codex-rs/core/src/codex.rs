@@ -3318,6 +3318,17 @@ async fn handle_function_call(
                     },
                 };
             }
+            // 记录本次函数调用到原会话历史，确保后续闭合注入的 FunctionCallOutput 能匹配到相同 call_id。
+            sess.record_conversation_items_for(
+                conv,
+                &[ResponseItem::FunctionCall {
+                    id: None,
+                    name: name.clone(),
+                    arguments: arguments.clone(),
+                    call_id: call_id.clone(),
+                }],
+            )
+            .await;
             // Enforce optional fairness bound on consecutive interrupting conv.* calls.
             if let Some(max) = turn_context.client.get_max_interrupt_chain_depth() {
                 let mut depth = sess.interrupt_chain_depth.lock_unchecked();
@@ -3418,6 +3429,17 @@ async fn handle_function_call(
                     },
                 };
             }
+            // 同理：预先记录 FunctionCall，避免恢复到原会话时缺失请求端导致 call_id 不匹配。
+            sess.record_conversation_items_for(
+                conv,
+                &[ResponseItem::FunctionCall {
+                    id: None,
+                    name: name.clone(),
+                    arguments: arguments.clone(),
+                    call_id: call_id.clone(),
+                }],
+            )
+            .await;
 
             // Enforce optional fairness bound on consecutive interrupting conv.* calls.
             if let Some(max) = turn_context.client.get_max_interrupt_chain_depth() {
