@@ -589,15 +589,15 @@ pub(crate) fn get_openai_tools(
                 },
             );
             tools.push(OpenAiTool::Function(ResponsesApiTool {
-            name: "conv_create".to_string(),
-            description: "Create a new conversation (interrupts current task); schedules target conversation task then resumes original with tool output".to_string(),
-            strict: false,
-            parameters: JsonSchema::Object {
-                properties,
-                required: None,
-                additional_properties: Some(false),
-            },
-        }));
+                name: "conv_create".to_string(),
+                description: "Create a new conversation".to_string(),
+                strict: false,
+                parameters: JsonSchema::Object {
+                    properties,
+                    required: None,
+                    additional_properties: Some(false),
+                },
+            }));
         }
         // conv_send
         {
@@ -626,21 +626,20 @@ pub(crate) fn get_openai_tools(
                 },
             );
             tools.push(OpenAiTool::Function(ResponsesApiTool {
-            name: "conv_send".to_string(),
-            description: "Send a message to an existing conversation (interrupts current task); schedules target conversation task then resumes original with tool output".to_string(),
-            strict: false,
-            parameters: JsonSchema::Object {
-                properties,
-                required: Some(vec!["conversation_id".to_string()]),
-                additional_properties: Some(false),
-            },
-        }));
+                name: "conv_send".to_string(),
+                description: "Send a message to an existing conversation".to_string(),
+                strict: false,
+                parameters: JsonSchema::Object {
+                    properties,
+                    required: Some(vec!["conversation_id".to_string()]),
+                    additional_properties: Some(false),
+                },
+            }));
         }
         // conv_list
         tools.push(OpenAiTool::Function(ResponsesApiTool {
             name: "conv_list".to_string(),
-            description: "List all conversations in the current session (non‑interrupting)"
-                .to_string(),
+            description: "List all conversations in the current session".to_string(),
             strict: false,
             parameters: JsonSchema::Object {
                 properties: BTreeMap::new(),
@@ -665,8 +664,7 @@ pub(crate) fn get_openai_tools(
             );
             tools.push(OpenAiTool::Function(ResponsesApiTool {
                 name: "conv_history".to_string(),
-                description: "Return message history for a conversation (non‑interrupting)"
-                    .to_string(),
+                description: "Return message history for a conversation".to_string(),
                 strict: false,
                 parameters: JsonSchema::Object {
                     properties,
@@ -685,17 +683,16 @@ pub(crate) fn get_openai_tools(
                 },
             );
             tools.push(OpenAiTool::Function(ResponsesApiTool {
-            name: "conv_destroy".to_string(),
-            description:
-                "Destroy a conversation (non‑interrupting; cannot destroy the root conversation)"
+                name: "conv_destroy".to_string(),
+                description: "Destroy a conversation; cannot destroy the root conversation"
                     .to_string(),
-            strict: false,
-            parameters: JsonSchema::Object {
-                properties,
-                required: Some(vec!["conversation_id".to_string()]),
-                additional_properties: Some(false),
-            },
-        }));
+                strict: false,
+                parameters: JsonSchema::Object {
+                    properties,
+                    required: Some(vec!["conversation_id".to_string()]),
+                    additional_properties: Some(false),
+                },
+            }));
         }
     }
 
