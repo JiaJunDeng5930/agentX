@@ -9,7 +9,9 @@ pub(crate) struct ConversationHistory {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     approx_tokens: usize,
+    #[allow(dead_code)]
     max_tokens: usize,
+    #[allow(dead_code)]
     max_items: usize,
 }
 
@@ -51,6 +53,7 @@ impl ConversationHistory {
 
     /// Append a text `delta` to the latest assistant message, creating a new
     /// assistant entry if none exists yet (e.g. first delta for this turn).
+    #[allow(dead_code)]
     pub(crate) fn append_assistant_text(&mut self, delta: &str) {
         let delta_tokens = estimate_text_tokens(delta);
         match self.items.last_mut() {
@@ -100,6 +103,7 @@ impl ConversationHistory {
         self.recompute_tokens();
     }
 
+    #[allow(dead_code)]
     fn enforce_limits(&mut self) {
         while self.items.len() > self.max_items || self.approx_tokens > self.max_tokens {
             if let Some(removed) = self.items.first().cloned() {
@@ -175,6 +179,7 @@ fn estimate_text_tokens(s: &str) -> usize {
 }
 
 /// Helper to append the textual content from `src` into `dst` in place.
+#[allow(dead_code)]
 fn append_text_content(
     dst: &mut Vec<codex_protocol::models::ContentItem>,
     src: &Vec<codex_protocol::models::ContentItem>,
@@ -188,6 +193,7 @@ fn append_text_content(
 
 /// Append a single text delta to the last OutputText item in `content`, or
 /// push a new OutputText item if none exists.
+#[allow(dead_code)]
 fn append_text_delta(content: &mut Vec<codex_protocol::models::ContentItem>, delta: &str) {
     if let Some(codex_protocol::models::ContentItem::OutputText { text }) = content
         .iter_mut()

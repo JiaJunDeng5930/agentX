@@ -400,6 +400,7 @@ impl ModelClient {
         self.config.auto_compact_threshold_percent
     }
 
+    #[allow(dead_code)]
     pub fn get_auto_compact_interrupt_mid_turn(&self) -> bool {
         self.config.auto_compact_interrupt_mid_turn
     }

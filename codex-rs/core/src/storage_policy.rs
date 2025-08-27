@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::time::Duration;
 
 /// Storage policy for conversation/rollout data and upstream model storage.

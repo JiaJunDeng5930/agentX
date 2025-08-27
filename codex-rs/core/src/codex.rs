@@ -1153,6 +1153,7 @@ impl Session {
         let _ = self.tx_event.send(event).await;
     }
 
+    #[allow(dead_code)]
     async fn notify_stream_error(&self, sub_id: &str, message: impl Into<String>) {
         let event = Event {
             id: sub_id.to_string(),
@@ -1167,6 +1168,7 @@ impl Session {
 
     /// Build the full turn input by concatenating the current conversation
     /// history with additional items for this turn.
+    #[allow(private_interfaces)]
     pub fn turn_input_with_history_for(
         &self,
         conv: &Arc<Conversation>,
@@ -1195,6 +1197,7 @@ impl Session {
         }
     }
 
+    #[allow(private_interfaces)]
     pub fn get_pending_input_for(&self, conv: &Arc<Conversation>) -> Vec<ResponseInputItem> {
         let mut conv_state = conv.state.lock_unchecked();
         if conv_state.pending_input.is_empty() {
@@ -1282,6 +1285,7 @@ pub(crate) struct ExecCommandContext {
 #[derive(Clone, Debug)]
 struct TaskClosure {
     call_id: String,
+    #[allow(dead_code)]
     tool_name: String,
     /// 消息来源的 conversation（用于从该对话取最后一条 assistant 消息）
     msg_from_conversation: uuid::Uuid,
@@ -1291,6 +1295,7 @@ struct TaskClosure {
 struct TaskPlan {
     conversation_id: uuid::Uuid,
     input_items: Vec<InputItem>,
+    #[allow(dead_code)]
     base_instructions_override: Option<String>,
     closure: Option<TaskClosure>,
 }
@@ -1401,7 +1406,8 @@ impl Session {
     /// 继承根对话上下文并覆盖
     fn open_conversation_with(
         &self,
-        base_instructions_override: Option<String>,
+        #[allow(dead_code)]
+    base_instructions_override: Option<String>,
         user_instructions: Option<String>,
         mcp_allowlist: Option<std::collections::HashSet<String>>,
         tools_prefs_override: Option<ToolsPrefs>,
@@ -4937,6 +4943,7 @@ mod conv_tools_tests {
 /// requiring a live model to issue the function call.
 pub async fn invoke_conv_tool_for_cli(
     cfg: crate::config::Config,
+    #[allow(dead_code)]
     tool_name: String,
     args_json: String,
 ) -> anyhow::Result<FunctionCallOutputPayload> {
