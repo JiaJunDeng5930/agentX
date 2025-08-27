@@ -2,7 +2,7 @@
 
 本文定义一组“内置工具”（`task` 运行时模型可调用，与 `apply_patch`/`shell` 并列）用于在单一 `session` 中管理与协作多个 `conversation`，并满足“打断并串行切换”的语义。
 
-- 创建新 `conversation`（可定制 `base_instruction` / `user_instruction` / `mcp_view` / `internal tools`）
+ - 创建新 `conversation`（可定制 `base_instruction` / `user_instruction` / `mcp_view`）
 - 向既有 `conversation` 发送消息
 - 查看当前存在的 `conversation`
 - 查看某 `conversation` 的历史消息（仅 message）
@@ -31,10 +31,9 @@
 - 参数：
   - `base_instruction_text?: string`
   - `base_instruction_file?: string`（相对路径相对于 `turn_context.cwd`，与上互斥；均未提供则继承当前 `conversation` 的 base）
-  - `user_instruction?: string`（与 `items` 至少一项，作为首轮用户输入之一）
-  - `items?: InputItem[]`（与 `user_instruction` 至少一项，支持多模态首轮输入）
+  - `user_instruction: string`（必填，作为新会话首轮用户输入之一）
+  - `items?: InputItem[]`（可选，支持多模态首轮输入）
   - `mcp_allowlist?: string[]`（未提供则继承当前 `conversation` 的 `mcp_view`）
-  - `internal_tools?: { include_plan_tool?: bool, include_apply_patch_tool?: bool, web_search_request?: bool, use_streamable_shell_tool?: bool }`（未提供则继承当前 `conversation` 的 `tools_prefs`）
 - 行为：
   - 触发时：当前 `task` → `TurnAborted(Replaced)`
   - 随后依次入队运行：
@@ -226,14 +225,7 @@
  
 ---
  
-## internal_tools → ToolsConfig 映射
- 
-- `internal_tools` 字段映射到 `ToolsConfig::new` 的参数：
-  - `include_plan_tool`
-  - `include_apply_patch_tool`
-  - `web_search_request`
-  - `use_streamable_shell_tool`
-- 注意：`apply_patch` 的最终形态受 `model_family.apply_patch_tool_type` 约束（可能强制为 `Freeform` 或 `Function`）；即便 `internal_tools` 启用，也会被 `model_family` 的配置覆盖到特定实现形态。
+注：`conv_create` 不再接受 `internal_tools` 参数，新建会话的工具集保持默认设置。
 
 ---
 

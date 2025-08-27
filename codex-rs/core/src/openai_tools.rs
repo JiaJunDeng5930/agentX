@@ -504,7 +504,7 @@ pub(crate) fn get_openai_tools(
                 "user_instruction".to_string(),
                 JsonSchema::String {
                     description: Some(
-                        "Optional initial user instruction to seed the conversation".to_string(),
+                        "Initial user instruction to seed the new conversation".to_string(),
                     ),
                 },
             );
@@ -530,54 +530,13 @@ pub(crate) fn get_openai_tools(
                     ),
                 },
             );
-            // internal_tools toggles
-            let mut internal_tools_props = BTreeMap::new();
-            internal_tools_props.insert(
-                "include_plan_tool".to_string(),
-                JsonSchema::Boolean {
-                    description: Some(
-                        "Whether to include the plan tool in this conversation".to_string(),
-                    ),
-                },
-            );
-            internal_tools_props.insert(
-                "include_apply_patch_tool".to_string(),
-                JsonSchema::Boolean {
-                    description: Some(
-                        "Whether to include the apply_patch tool in this conversation".to_string(),
-                    ),
-                },
-            );
-            internal_tools_props.insert(
-                "web_search_request".to_string(),
-                JsonSchema::Boolean {
-                    description: Some(
-                        "Whether to include the web_search request tool in this conversation"
-                            .to_string(),
-                    ),
-                },
-            );
-            internal_tools_props.insert(
-                "use_streamable_shell_tool".to_string(),
-                JsonSchema::Boolean {
-                    description: Some("Use streamable shell tool when available".to_string()),
-                },
-            );
-            properties.insert(
-                "internal_tools".to_string(),
-                JsonSchema::Object {
-                    properties: internal_tools_props,
-                    required: None,
-                    additional_properties: Some(false),
-                },
-            );
             tools.push(OpenAiTool::Function(ResponsesApiTool {
                 name: "conv_create".to_string(),
                 description: "Create a new conversation".to_string(),
                 strict: false,
                 parameters: JsonSchema::Object {
                     properties,
-                    required: None,
+                    required: Some(vec!["user_instruction".to_string()]),
                     additional_properties: Some(false),
                 },
             }));

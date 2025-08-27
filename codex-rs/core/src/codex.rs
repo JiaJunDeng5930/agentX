@@ -3193,25 +3193,11 @@ async fn handle_function_call(
         "conv_create" => {
             #[derive(serde::Deserialize)]
             struct Args {
-                #[serde(default)]
-                user_instruction: Option<String>,
+                user_instruction: String,
                 #[serde(default)]
                 items: Option<Vec<InputItem>>,
                 #[serde(default)]
                 mcp_allowlist: Option<Vec<String>>,
-                #[serde(default)]
-                internal_tools: Option<InternalTools>,
-            }
-            #[derive(serde::Deserialize)]
-            struct InternalTools {
-                #[serde(default)]
-                include_plan_tool: Option<bool>,
-                #[serde(default)]
-                include_apply_patch_tool: Option<bool>,
-                #[serde(default)]
-                web_search_request: Option<bool>,
-                #[serde(default)]
-                use_streamable_shell_tool: Option<bool>,
             }
 
             let args: Args = match serde_json::from_str(&arguments) {
@@ -3230,39 +3216,16 @@ async fn handle_function_call(
             let allow = args
                 .mcp_allowlist
                 .map(|v| v.into_iter().collect::<std::collections::HashSet<_>>());
-            let tools = args.internal_tools.map(|t| ToolsPrefs {
-                include_plan_tool: t
-                    .include_plan_tool
-                    .unwrap_or(conv.ctx.tools_prefs.include_plan_tool),
-                include_apply_patch_tool: t
-                    .include_apply_patch_tool
-                    .unwrap_or(conv.ctx.tools_prefs.include_apply_patch_tool),
-                web_search_request: t
-                    .web_search_request
-                    .unwrap_or(conv.ctx.tools_prefs.web_search_request),
-                use_streamable_shell_tool: t
-                    .use_streamable_shell_tool
-                    .unwrap_or(conv.ctx.tools_prefs.use_streamable_shell_tool),
-            });
+            let tools: Option<ToolsPrefs> = None;
 
             let target_id = sess.open_conversation_with(None, None, allow, tools);
 
             // 构造任务计划：先在新对话跑一轮，再在原对话注入闭合
             let mut input_items: Vec<InputItem> = Vec::new();
+            // Always include the required user_instruction as the initial message.
+            input_items.push(InputItem::Text { text: args.user_instruction });
             if let Some(mut items) = args.items {
                 input_items.append(&mut items);
-            }
-            if let Some(text) = args.user_instruction {
-                input_items.push(InputItem::Text { text });
-            }
-            if input_items.is_empty() {
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: FunctionCallOutputPayload {
-                        content: "user_instruction or items required".into(),
-                        success: Some(false),
-                    },
-                };
             }
             // 记录本次函数调用到原会话历史，确保后续闭合注入的 FunctionCallOutput 能匹配到相同 call_id。
             sess.record_conversation_items_for(
