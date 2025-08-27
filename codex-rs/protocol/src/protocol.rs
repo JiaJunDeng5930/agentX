@@ -84,10 +84,6 @@ pub enum Op {
     /// - For text/items: an empty text item will be injected.
     ConvCreate {
         #[serde(skip_serializing_if = "Option::is_none")]
-        base_instruction_text: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        base_instruction_file: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
         user_instruction: Option<String>,
     },
     ConvSend {

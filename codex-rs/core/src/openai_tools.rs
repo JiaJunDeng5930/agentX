@@ -501,23 +501,6 @@ pub(crate) fn get_openai_tools(
         {
             let mut properties = BTreeMap::new();
             properties.insert(
-                "base_instruction_text".to_string(),
-                JsonSchema::String {
-                    description: Some(
-                        "Inline base instructions text override for the new conversation"
-                            .to_string(),
-                    ),
-                },
-            );
-            properties.insert(
-                "base_instruction_file".to_string(),
-                JsonSchema::String {
-                    description: Some(
-                        "Path to a file containing base instructions (relative to cwd)".to_string(),
-                    ),
-                },
-            );
-            properties.insert(
                 "user_instruction".to_string(),
                 JsonSchema::String {
                     description: Some(

@@ -756,8 +756,6 @@ impl ChatWidget {
             }
             SlashCommand::ConvCreate => {
                 self.app_event_tx.send(AppEvent::CodexOp(Op::ConvCreate {
-                    base_instruction_text: None,
-                    base_instruction_file: None,
                     user_instruction: None,
                 }));
             }
