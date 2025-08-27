@@ -32,6 +32,7 @@
   - `base_instruction_text?: string`
   - `base_instruction_file?: string`（相对路径相对于 `turn_context.cwd`，与上互斥；均未提供则继承当前 `conversation` 的 base）
   - `user_instruction: string`（必填，作为新会话首轮用户输入之一）
+  - `user_instruction_file?: string`（可选，文件路径；若提供，其文件内容会在执行时读取并拼接到 `user_instruction` 前，二者以换行分隔，作为新会话的 user_instruction）
   - `items?: InputItem[]`（可选，支持多模态首轮输入）
   - `mcp_allowlist?: string[]`（未提供则继承当前 `conversation` 的 `mcp_view`）
 - 行为：

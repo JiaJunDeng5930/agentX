@@ -508,6 +508,14 @@ pub(crate) fn get_openai_tools(
                     ),
                 },
             );
+            properties.insert(
+                "user_instruction_file".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Optional file path; when provided, the file content is prepended to user_instruction".to_string(),
+                    ),
+                },
+            );
             // items: lightweight multi‑modal, schema as generic object array to remain permissive
             properties.insert(
                 "items".to_string(),

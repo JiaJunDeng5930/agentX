@@ -3195,6 +3195,8 @@ async fn handle_function_call(
             struct Args {
                 user_instruction: String,
                 #[serde(default)]
+                user_instruction_file: Option<String>,
+                #[serde(default)]
                 items: Option<Vec<InputItem>>,
                 #[serde(default)]
                 mcp_allowlist: Option<Vec<String>>,
@@ -3218,12 +3220,49 @@ async fn handle_function_call(
                 .map(|v| v.into_iter().collect::<std::collections::HashSet<_>>());
             let tools: Option<ToolsPrefs> = None;
 
-            let target_id = sess.open_conversation_with(None, None, allow, tools);
+            // Build effective user_instruction by optionally prepending file content.
+            let mut effective_ui = String::new();
+            if let Some(path_str) = args.user_instruction_file.as_ref() {
+                let p = std::path::Path::new(path_str);
+                let abs = if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    turn_context.cwd.join(p)
+                };
+                match std::fs::read_to_string(&abs) {
+                    Ok(content) => {
+                        effective_ui.push_str(&content);
+                        if !effective_ui.ends_with('\n') {
+                            effective_ui.push('\n');
+                        }
+                    }
+                    Err(e) => {
+                        return ResponseInputItem::FunctionCallOutput {
+                            call_id,
+                            output: FunctionCallOutputPayload {
+                                content: format!(
+                                    "failed to read user_instruction_file '{}': {}",
+                                    abs.display(), e
+                                ),
+                                success: Some(false),
+                            },
+                        };
+                    }
+                }
+            }
+            effective_ui.push_str(&args.user_instruction);
+
+            let target_id = sess.open_conversation_with(
+                None,
+                Some(effective_ui.clone()),
+                allow,
+                tools,
+            );
 
             // 构造任务计划：先在新对话跑一轮，再在原对话注入闭合
             let mut input_items: Vec<InputItem> = Vec::new();
-            // Always include the required user_instruction as the initial message.
-            input_items.push(InputItem::Text { text: args.user_instruction });
+            // Always include the effective user_instruction as the initial message.
+            input_items.push(InputItem::Text { text: effective_ui });
             if let Some(mut items) = args.items {
                 input_items.append(&mut items);
             }
