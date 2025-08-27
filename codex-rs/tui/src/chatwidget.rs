@@ -112,6 +112,8 @@ pub(crate) struct ChatWidget {
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
     last_history_was_exec: bool,
+    // Currently active conversation id for the running task (if any)
+    active_conv_id: Option<uuid::Uuid>,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
 }
@@ -622,6 +624,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             session_id: None,
             last_history_was_exec: false,
+            active_conv_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
         }
@@ -667,6 +670,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             session_id: None,
             last_history_was_exec: false,
+            active_conv_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
         }
@@ -934,12 +938,16 @@ impl ChatWidget {
 
         // Only show the text portion in conversation history.
         if !text.is_empty() {
-            self.add_to_history(history_cell::new_user_prompt(text.clone(), None));
+            let short = self.active_conv_id.map(|u| {
+                let s = u.as_simple().to_string();
+                s[..s.len().min(8)].to_string()
+            });
+            self.add_to_history(history_cell::new_user_prompt(text.clone(), short));
         }
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
-        let Event { id, msg, .. } = event;
+        let Event { id, msg, conversation_id, .. } = event;
 
         match msg {
             EventMsg::AgentMessageDelta(_)
@@ -965,10 +973,22 @@ impl ChatWidget {
                 self.on_agent_reasoning_final()
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TaskStarted(_) => self.on_task_started(),
-            EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
-            EventMsg::TaskStarted(_) => self.on_task_started(),
-            EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
+            EventMsg::TaskStarted(_) => {
+                self.on_task_started();
+                self.active_conv_id = conversation_id;
+                self.bottom_pane.set_active_conv_id(self.active_conv_id);
+                let short = self.active_conv_id.map(|u| {
+                    let s = u.as_simple().to_string();
+                    s[..s.len().min(8)].to_string()
+                });
+                self.stream.set_conv_short_id(short.clone());
+},
+            EventMsg::TaskComplete(TaskCompleteEvent { .. }) => {
+                self.on_task_complete();
+                self.active_conv_id = None;
+                self.bottom_pane.set_active_conv_id(None);
+                self.stream.set_conv_short_id(None);
+            },
             EventMsg::TokenCount(token_usage) => self.on_token_count(token_usage),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {

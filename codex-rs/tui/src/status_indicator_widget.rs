@@ -25,6 +25,9 @@ pub(crate) struct StatusIndicatorWidget {
     /// Queued user messages to display under the status line.
     queued_messages: Vec<String>,
 
+    /// Optional short conversation id (e.g., 8-char uuid) for display
+    conv_short: Option<String>,
+
     start_time: Instant,
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
@@ -36,6 +39,7 @@ impl StatusIndicatorWidget {
             header: String::from("Working"),
             queued_messages: Vec::new(),
             start_time: Instant::now(),
+            conv_short: None,
 
             app_event_tx,
             frame_requester,
@@ -82,7 +86,13 @@ impl StatusIndicatorWidget {
     }
 
     /// Replace the queued messages displayed beneath the header.
-    pub(crate) fn set_queued_messages(&mut self, queued: Vec<String>) {
+    
+    /// Update the short-form conversation id to be displayed.
+    pub(crate) fn update_conv_short(&mut self, short_id: Option<String>) {
+        self.conv_short = short_id;
+    }
+
+pub(crate) fn set_queued_messages(&mut self, queued: Vec<String>) {
         self.queued_messages = queued;
         // Ensure a redraw so changes are visible.
         self.frame_requester.schedule_frame();
@@ -109,6 +119,10 @@ impl WidgetRef for StatusIndicatorWidget {
             "Esc".dim().bold(),
             " to interrupt)".dim(),
         ]);
+        if let Some(short) = &self.conv_short {
+            spans.push(" ".into());
+            spans.push(format!("conv {short}").dim());
+        }
 
         // Build lines: status, then queued messages, then spacer.
         let mut lines: Vec<Line<'static>> = Vec::new();

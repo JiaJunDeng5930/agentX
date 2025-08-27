@@ -331,7 +331,13 @@ impl BottomPane {
 
     /// Update the active conversation id short string in the status view (if active).
     pub(crate) fn set_active_conv_id(&mut self, id: Option<uuid::Uuid>) {
-        let _ = id; // No-op in current UI; kept for compatibility.
+        let short = id.map(|u| {
+            let s = u.as_simple().to_string();
+            s[..s.len().min(8)].to_string()
+        });
+        if let Some(status) = self.status.as_mut() {
+            status.update_conv_short(short);
+        }
         self.request_redraw();
     }
 

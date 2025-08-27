@@ -760,6 +760,7 @@ fn derive_config_from_params(
                 })
                 .collect()
         }),
+        skip_project_doc: None,
     };
 
     let cli_overrides = cli_overrides

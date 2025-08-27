@@ -166,6 +166,7 @@ impl CodexToolCallParam {
             show_raw_agent_reasoning: None,
             tools_web_search_request: None,
             mcp_tool_allowlist: None,
+            skip_project_doc: None,
         };
 
         let cli_overrides = cli_overrides
