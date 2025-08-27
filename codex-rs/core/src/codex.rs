@@ -1967,38 +1967,8 @@ async fn submission_loop(
                     }
                 }
             }
-            Op::ConvCreate {
-                base_instruction_text,
-                base_instruction_file,
-                user_instruction,
-            } => {
-                // resolve base override
-                let mut base_override = base_instruction_text;
-                if base_override.is_none()
-                    && let Some(path) = base_instruction_file
-                {
-                    let resolved = turn_context.resolve_path(Some(path));
-                    match std::fs::read_to_string(&resolved) {
-                        Ok(s) => base_override = Some(s),
-                        Err(e) => {
-                            let _ = sess
-                                .tx_event
-                                .send(Event {
-                                    id: sub.id,
-                                    conversation_id: Some(sess.root_conversation_id()),
-                                    task_id: sess.current_task_id(),
-                                    msg: EventMsg::Error(ErrorEvent {
-                                        message: format!(
-                                            "failed to read base_instruction_file: {e}"
-                                        ),
-                                    }),
-                                })
-                                .await;
-                            continue;
-                        }
-                    }
-                }
-                let target_id = sess.open_conversation_with(base_override, None, None, None);
+            Op::ConvCreate { user_instruction } => {
+                let target_id = sess.open_conversation_with(None, None, None, None);
                 // Build items
                 let mut items: Vec<InputItem> = Vec::new();
                 if let Some(text) = user_instruction {
@@ -3223,29 +3193,13 @@ async fn handle_function_call(
         "conv_create" => {
             #[derive(serde::Deserialize)]
             struct Args {
+                user_instruction: String,
                 #[serde(default)]
-                base_instruction_text: Option<String>,
-                #[serde(default)]
-                base_instruction_file: Option<String>,
-                #[serde(default)]
-                user_instruction: Option<String>,
+                user_instruction_file: Option<String>,
                 #[serde(default)]
                 items: Option<Vec<InputItem>>,
                 #[serde(default)]
                 mcp_allowlist: Option<Vec<String>>,
-                #[serde(default)]
-                internal_tools: Option<InternalTools>,
-            }
-            #[derive(serde::Deserialize)]
-            struct InternalTools {
-                #[serde(default)]
-                include_plan_tool: Option<bool>,
-                #[serde(default)]
-                include_apply_patch_tool: Option<bool>,
-                #[serde(default)]
-                web_search_request: Option<bool>,
-                #[serde(default)]
-                use_streamable_shell_tool: Option<bool>,
             }
 
             let args: Args = match serde_json::from_str(&arguments) {
@@ -3261,62 +3215,56 @@ async fn handle_function_call(
                 }
             };
 
-            // Resolve base instructions
-            let mut base_override = args.base_instruction_text.clone();
-            if base_override.is_none()
-                && let Some(path) = &args.base_instruction_file
-            {
-                let path = turn_context.resolve_path(Some(path.clone()));
-                match std::fs::read_to_string(&path) {
-                    Ok(s) => base_override = Some(s),
-                    Err(_) => {
+            let allow = args
+                .mcp_allowlist
+                .map(|v| v.into_iter().collect::<std::collections::HashSet<_>>());
+            let tools: Option<ToolsPrefs> = None;
+
+            // Build effective user_instruction by optionally prepending file content.
+            let mut effective_ui = String::new();
+            if let Some(path_str) = args.user_instruction_file.as_ref() {
+                let p = std::path::Path::new(path_str);
+                let abs = if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    turn_context.cwd.join(p)
+                };
+                match std::fs::read_to_string(&abs) {
+                    Ok(content) => {
+                        effective_ui.push_str(&content);
+                        if !effective_ui.ends_with('\n') {
+                            effective_ui.push('\n');
+                        }
+                    }
+                    Err(e) => {
                         return ResponseInputItem::FunctionCallOutput {
                             call_id,
                             output: FunctionCallOutputPayload {
-                                content: "failed to read base_instruction_file".to_string(),
+                                content: format!(
+                                    "failed to read user_instruction_file '{}': {}",
+                                    abs.display(), e
+                                ),
                                 success: Some(false),
                             },
                         };
                     }
                 }
             }
+            effective_ui.push_str(&args.user_instruction);
 
-            let allow = args
-                .mcp_allowlist
-                .map(|v| v.into_iter().collect::<std::collections::HashSet<_>>());
-            let tools = args.internal_tools.map(|t| ToolsPrefs {
-                include_plan_tool: t
-                    .include_plan_tool
-                    .unwrap_or(conv.ctx.tools_prefs.include_plan_tool),
-                include_apply_patch_tool: t
-                    .include_apply_patch_tool
-                    .unwrap_or(conv.ctx.tools_prefs.include_apply_patch_tool),
-                web_search_request: t
-                    .web_search_request
-                    .unwrap_or(conv.ctx.tools_prefs.web_search_request),
-                use_streamable_shell_tool: t
-                    .use_streamable_shell_tool
-                    .unwrap_or(conv.ctx.tools_prefs.use_streamable_shell_tool),
-            });
-
-            let target_id = sess.open_conversation_with(base_override.clone(), None, allow, tools);
+            let target_id = sess.open_conversation_with(
+                None,
+                Some(effective_ui.clone()),
+                allow,
+                tools,
+            );
 
             // 构造任务计划：先在新对话跑一轮，再在原对话注入闭合
             let mut input_items: Vec<InputItem> = Vec::new();
+            // Always include the effective user_instruction as the initial message.
+            input_items.push(InputItem::Text { text: effective_ui });
             if let Some(mut items) = args.items {
                 input_items.append(&mut items);
-            }
-            if let Some(text) = args.user_instruction {
-                input_items.push(InputItem::Text { text });
-            }
-            if input_items.is_empty() {
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: FunctionCallOutputPayload {
-                        content: "user_instruction or items required".into(),
-                        success: Some(false),
-                    },
-                };
             }
             // 记录本次函数调用到原会话历史，确保后续闭合注入的 FunctionCallOutput 能匹配到相同 call_id。
             sess.record_conversation_items_for(
@@ -4907,35 +4855,7 @@ mod conv_tools_tests {
             output.content
         );
     }
-    #[tokio::test(flavor = "current_thread")]
-    async fn conv_create_missing_file_fails_without_enqueue() {
-        let (sess, tc, root) = make_session().await;
-        let args = serde_json::json!({ "base_instruction_file": "/path/does/not/exist.md", "user_instruction": "hello" });
-        let mut tracker = TurnDiffTracker::new();
-        let out = handle_function_call(
-            sess.clone(),
-            &root,
-            &tc,
-            &mut tracker,
-            "sub-test".to_string(),
-            "conv_create".to_string(),
-            args.to_string(),
-            "call-1".to_string(),
-        )
-        .await;
-        let ResponseInputItem::FunctionCallOutput { output, .. } = out else {
-            panic!("expected FunctionCallOutput");
-        };
-        assert_eq!(output.success, Some(false));
-        assert!(
-            output
-                .content
-                .contains("failed to read base_instruction_file"),
-            "unexpected content: {}",
-            output.content
-        );
-        assert!(sess.pending_tasks.lock_unchecked().is_empty());
-    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn conv_send_requires_text_or_items() {
         let (sess, tc, root) = make_session().await;

@@ -117,6 +117,34 @@ pub async fn run_main(
     // canonicalize the cwd
     let cwd = cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p));
 
+    // Resolve optional user instructions override from CLI string or file
+    let user_instructions_from_file: Option<String> = if let Some(p) = cli.instructions_file.as_ref() {
+        // Resolve relative path against the effective cwd (if provided), else process cwd
+        let resolved = if let Some(cwd) = cli.cwd.as_ref() {
+            let abs = if p.is_absolute() { p.clone() } else { cwd.join(p) };
+            abs
+        } else {
+            // Fall back to current_dir if no --cd provided
+            let base = std::env::current_dir().unwrap_or_default();
+            if p.is_absolute() { p.clone() } else { base.join(p) }
+        };
+        match std::fs::read_to_string(&resolved) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                #[allow(clippy::print_stderr)]
+                {
+                    eprintln!(
+                        "Error reading --instructions-file '{}': {}",
+                        resolved.display(),
+                        e
+                    );
+                }
+                std::process::exit(1);
+            }
+        }
+    } else { None };
+    let user_instructions_override = user_instructions_from_file;
+
     let overrides = ConfigOverrides {
         model,
         approval_policy,
@@ -126,13 +154,14 @@ pub async fn run_main(
         config_profile: cli.config_profile.clone(),
         codex_linux_sandbox_exe,
         base_instructions: None,
-        user_instructions: None,
+        user_instructions: user_instructions_override,
         include_plan_tool: Some(true),
         include_apply_patch_tool: None,
         disable_response_storage: cli.oss.then_some(true),
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: cli.web_search.then_some(true),
         mcp_tool_allowlist: None,
+        skip_project_doc: cli.no_project_doc.then_some(true),
     };
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
     let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };

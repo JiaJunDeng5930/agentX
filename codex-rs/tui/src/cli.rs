@@ -8,6 +8,9 @@ use std::path::PathBuf;
 pub struct Cli {
     /// Optional user prompt to start the session.
     pub prompt: Option<String>,
+    /// User instructions file to seed the session (mutually exclusive with positional prompt).
+    #[arg(long = "instructions-file", value_name = "FILE", conflicts_with = "prompt")]
+    pub instructions_file: Option<PathBuf>,
 
     /// Optional image(s) to attach to the initial prompt.
     #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
@@ -57,6 +60,9 @@ pub struct Cli {
     /// Enable web search (off by default). When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
+    /// Do not concatenate project AGENTS.md into the session instructions.
+    #[arg(long = "no-project-doc", default_value_t = false)]
+    pub no_project_doc: bool,
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,

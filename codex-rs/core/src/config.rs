@@ -609,6 +609,8 @@ pub struct ConfigOverrides {
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
     pub mcp_tool_allowlist: Option<Vec<String>>,
+    /// When true, disables concatenation of project AGENTS.md into user instructions.
+    pub skip_project_doc: Option<bool>,
 }
 
 impl Config {
@@ -643,6 +645,7 @@ impl Config {
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
             mcp_tool_allowlist,
+            skip_project_doc,
         } = overrides;
 
         let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
@@ -784,7 +787,11 @@ impl Config {
             base_instructions,
             mcp_servers: cfg.mcp_servers,
             model_providers,
-            project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
+            project_doc_max_bytes: if skip_project_doc.unwrap_or(false) {
+                0
+            } else {
+                cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES)
+            },
             codex_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
