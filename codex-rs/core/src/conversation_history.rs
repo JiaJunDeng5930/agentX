@@ -45,30 +45,7 @@ impl ConversationHistory {
                 continue;
             }
 
-            // Merge adjacent assistant messages into a single history entry.
-            match (&*item, self.items.last_mut()) {
-                (
-                    ResponseItem::Message {
-                        role: new_role,
-                        content: new_content,
-                        ..
-                    },
-                    Some(ResponseItem::Message {
-                        role: last_role,
-                        content: last_content,
-                        ..
-                    }),
-                ) if new_role == "assistant" && last_role == "assistant" => {
-                    let delta_tokens = estimate_tokens_in_content(new_content);
-                    append_text_content(last_content, new_content);
-                    self.approx_tokens = self.approx_tokens.saturating_add(delta_tokens);
-                }
-                _ => {
-                    self.approx_tokens = self.approx_tokens.saturating_add(estimate_tokens(&item));
-                    self.items.push(item.clone());
-                }
-            }
-            self.enforce_limits();
+            self.items.push(item.clone());
         }
     }
 
@@ -248,49 +225,6 @@ mod tests {
                 text: text.to_string(),
             }],
         }
-    }
-
-    #[test]
-    fn merges_adjacent_assistant_messages() {
-        let mut h = ConversationHistory::default();
-        let a1 = assistant_msg("Hello");
-        let a2 = assistant_msg(", world!");
-        h.record_items([&a1, &a2]);
-
-        let items = h.contents();
-        assert_eq!(
-            items,
-            vec![ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "Hello, world!".to_string()
-                }]
-            }]
-        );
-    }
-
-    #[test]
-    fn append_assistant_text_creates_and_appends() {
-        let mut h = ConversationHistory::default();
-        h.append_assistant_text("Hello");
-        h.append_assistant_text(", world");
-
-        // Now record a final full assistant message and verify it merges.
-        let final_msg = assistant_msg("!");
-        h.record_items([&final_msg]);
-
-        let items = h.contents();
-        assert_eq!(
-            items,
-            vec![ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "Hello, world!".to_string()
-                }]
-            }]
-        );
     }
 
     #[test]

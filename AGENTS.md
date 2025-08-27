@@ -9,12 +9,10 @@ This repo hosts the Codex CLI (Rust) workspace used to run the agent, TUI, and c
   - `login/`, `apply-patch/`, and other crates: focused functionality consumed by `core`/`tui`.
 - Tests live alongside sources (e.g., `codex-rs/*/src/**/*_tests.rs`) plus snapshot/fixture dirs (e.g., `tui/src/snapshots`, `tui/tests/fixtures/`).
 
-## Build, Test, and Development Commands
-- Format: `cd codex-rs && just fmt` (uses rustfmt; falls back to stable config).
-- Build all: `cd codex-rs && cargo build --workspace` (add `--release` for optimized binaries).
-- Run TUI: `cd codex-rs && cargo run -p codex-tui --`.
-- Tests (workspace): `cd codex-rs && cargo test --workspace`.
-- Focused tests: `cargo test -p codex-core` or `cargo test -p codex-tui`.
+Before finalizing a change to `codex-rs`, run `just fmt` (in `codex-rs` directory) to format the code and `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Additionally, run the tests:
+1. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `cargo test -p codex-tui`.
+2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `cargo test --all-features`.
+When running interactively, ask the user before running these commands to finalize.
 
 ## Coding Style & Naming Conventions
 - Rust style with rustfmt (4-space indentation, trailing commas, stable config). Run `just fmt` before commits.

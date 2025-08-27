@@ -21,6 +21,7 @@ use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_login::AuthManager;
 use codex_protocol::protocol::ConversationHistoryResponseEvent;
+use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use futures::prelude::*;
@@ -61,7 +62,7 @@ use crate::exec::StreamOutput;
 use crate::exec::process_exec_tool_call;
 use crate::exec_command::EXEC_COMMAND_TOOL_NAME;
 use crate::exec_command::ExecCommandParams;
-use crate::exec_command::SESSION_MANAGER;
+use crate::exec_command::ExecSessionManager;
 use crate::exec_command::WRITE_STDIN_TOOL_NAME;
 use crate::exec_command::WriteStdinParams;
 use crate::exec_env::create_env;
@@ -70,8 +71,10 @@ use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::mcp_view::McpView;
 use crate::model_family::find_family_for_model;
+use crate::openai_model_info::get_model_info;
 use crate::openai_tools::ApplyPatchToolArgs;
 use crate::openai_tools::ToolsConfig;
+use crate::openai_tools::ToolsConfigParams;
 use crate::openai_tools::get_openai_tools;
 use crate::parse_command::parse_command;
 use crate::plan_tool::handle_update_plan;
@@ -352,6 +355,7 @@ pub(crate) struct Session {
 
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
+    session_manager: ExecSessionManager,
 
     /// External notifier command (will be passed as args to exec()). When
     /// `None` this feature is disabled.
@@ -379,6 +383,9 @@ pub(crate) struct Session {
 #[derive(Debug)]
 pub(crate) struct TurnContext {
     pub(crate) client: ModelClient,
+    pub(crate) tools_config: ToolsConfig,
+    pub(crate) user_instructions: Option<String>,
+    pub(crate) base_instructions: Option<String>,
     /// The session's current working directory. All relative paths provided by
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
@@ -604,8 +611,21 @@ impl Session {
             model_reasoning_summary,
             session_id,
         );
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &config.model_family,
+            approval_policy,
+            sandbox_policy: sandbox_policy.clone(),
+            include_plan_tool: config.include_plan_tool,
+            include_apply_patch_tool: config.include_apply_patch_tool,
+            include_web_search_request: config.tools_web_search_request,
+            use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+            include_conv_tools: provider.wire_api == crate::model_provider_info::WireApi::Responses,
+        });
         let turn_context = TurnContext {
             client,
+            tools_config,
+            user_instructions: user_instructions.clone(),
+            base_instructions: base_instructions.clone(),
             approval_policy,
             sandbox_policy,
             shell_environment_policy: config.shell_environment_policy.clone(),
@@ -667,6 +687,7 @@ impl Session {
             tx_event: tx_event.clone(),
             session_started: Instant::now(),
             mcp_connection_manager,
+            session_manager: ExecSessionManager::default(),
             notify,
             state: Mutex::new(state),
             rollout: Mutex::new(rollout_recorder),
@@ -1356,6 +1377,9 @@ impl Session {
             conv,
             Arc::new(TurnContext {
                 client: turn_context.client.clone(),
+                tools_config: turn_context.tools_config.clone(),
+                user_instructions: turn_context.user_instructions.clone(),
+                base_instructions: turn_context.base_instructions.clone(),
                 cwd: turn_context.cwd.clone(),
                 approval_policy: turn_context.approval_policy,
                 sandbox_policy: turn_context.sandbox_policy.clone(),
@@ -1578,11 +1602,14 @@ async fn submission_loop(
                 let mut updated_config = (*config).clone();
                 updated_config.model = effective_model.clone();
                 updated_config.model_family = effective_family.clone();
+                if let Some(model_info) = get_model_info(&effective_family) {
+                    updated_config.model_context_window = Some(model_info.context_window);
+                }
 
                 let client = ModelClient::new(
                     Arc::new(updated_config),
                     auth_manager,
-                    provider,
+                    provider.clone(),
                     effective_effort,
                     effective_summary,
                     sess.session_id,
@@ -1593,9 +1620,21 @@ async fn submission_loop(
                     .clone()
                     .unwrap_or(prev.sandbox_policy.clone());
                 let new_cwd = cwd.clone().unwrap_or_else(|| prev.cwd.clone());
-
                 let new_turn_context = TurnContext {
                     client,
+                    tools_config: ToolsConfig::new(&ToolsConfigParams {
+                        model_family: &effective_family,
+                        approval_policy: new_approval_policy,
+                        sandbox_policy: new_sandbox_policy.clone(),
+                        include_plan_tool: config.include_plan_tool,
+                        include_apply_patch_tool: config.include_apply_patch_tool,
+                        include_web_search_request: config.tools_web_search_request,
+                        use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+                        include_conv_tools: provider.wire_api
+                            == crate::model_provider_info::WireApi::Responses,
+                    }),
+                    user_instructions: prev.user_instructions.clone(),
+                    base_instructions: prev.base_instructions.clone(),
                     approval_policy: new_approval_policy,
                     sandbox_policy: new_sandbox_policy.clone(),
                     shell_environment_policy: prev.shell_environment_policy.clone(),
@@ -1648,6 +1687,7 @@ async fn submission_loop(
                 if let Err(items) = sess.inject_input_for_conv(root_id, items) {
                     // Derive a fresh TurnContext for this turn using the provided overrides.
                     let provider = turn_context.client.get_provider();
+                    let auth_manager = turn_context.client.get_auth_manager();
 
                     // Derive a model family for the requested model; fall back to the session's.
                     let model_family = find_family_for_model(&model)
@@ -1657,13 +1697,16 @@ async fn submission_loop(
                     let mut per_turn_config = (*config).clone();
                     per_turn_config.model = model.clone();
                     per_turn_config.model_family = model_family.clone();
+                    if let Some(model_info) = get_model_info(&model_family) {
+                        per_turn_config.model_context_window = Some(model_info.context_window);
+                    }
 
                     // Build a new client with per‑turn reasoning settings.
                     // Reuse the same provider and session id; auth defaults to env/API key.
                     let client = ModelClient::new(
                         Arc::new(per_turn_config),
-                        None,
-                        provider,
+                        auth_manager,
+                        provider.clone(),
                         effort,
                         summary,
                         sess.session_id,
@@ -1671,6 +1714,20 @@ async fn submission_loop(
 
                     let fresh_turn_context = TurnContext {
                         client,
+                        tools_config: ToolsConfig::new(&ToolsConfigParams {
+                            model_family: &model_family,
+                            approval_policy,
+                            sandbox_policy: sandbox_policy.clone(),
+                            include_plan_tool: config.include_plan_tool,
+                            include_apply_patch_tool: config.include_apply_patch_tool,
+                            include_web_search_request: config.tools_web_search_request,
+                            use_streamable_shell_tool: config
+                                .use_experimental_streamable_shell_tool,
+                            include_conv_tools: provider.wire_api
+                                == crate::model_provider_info::WireApi::Responses,
+                        }),
+                        user_instructions: turn_context.user_instructions.clone(),
+                        base_instructions: turn_context.base_instructions.clone(),
                         approval_policy,
                         sandbox_policy,
                         shell_environment_policy: turn_context.shell_environment_policy.clone(),
@@ -2169,7 +2226,9 @@ async fn run_task(
         id: sub_id.clone(),
         conversation_id: Some(conv.id),
         task_id: Some(task_id),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: turn_context.client.get_model_context_window(),
+        }),
     };
     if sess.tx_event.send(event).await.is_err() {
         return;
@@ -2420,18 +2479,17 @@ async fn run_turn(
     // Assemble tool configuration from conversation preferences and current policies/model.
     let model_family = turn_context.client.get_model_family();
     let prefs = &conv.ctx.tools_prefs;
-    let tools_config = ToolsConfig::new(
-        &model_family,
-        turn_context.approval_policy,
-        turn_context.sandbox_policy.clone(),
-        prefs.include_plan_tool,
-        prefs.include_apply_patch_tool,
-        prefs.web_search_request,
-        prefs.use_streamable_shell_tool,
-        // include conv tools only for Responses API
-        turn_context.client.get_provider().wire_api
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_family: &model_family,
+        approval_policy: turn_context.approval_policy,
+        sandbox_policy: turn_context.sandbox_policy.clone(),
+        include_plan_tool: prefs.include_plan_tool,
+        include_apply_patch_tool: prefs.include_apply_patch_tool,
+        include_web_search_request: prefs.web_search_request,
+        use_streamable_shell_tool: prefs.use_streamable_shell_tool,
+        include_conv_tools: turn_context.client.get_provider().wire_api
             == crate::model_provider_info::WireApi::Responses,
-    );
+    });
     let tools = get_openai_tools(&tools_config, Some(conv.ctx.mcp_view.list_tools()));
 
     let prompt = Prompt {
@@ -2666,11 +2724,6 @@ async fn try_run_turn(
                 return Ok((output, last_token_usage));
             }
             ResponseEvent::OutputTextDelta(delta) => {
-                {
-                    let mut st = conv.state.lock_unchecked();
-                    st.history.append_assistant_text(&delta);
-                }
-
                 let event = Event {
                     id: sub_id.to_string(),
                     conversation_id: Some(conv.id),
@@ -2722,11 +2775,14 @@ async fn run_compact_task(
     input: Vec<InputItem>,
     compact_instructions: String,
 ) {
+    let model_context_window = turn_context.client.get_model_context_window();
     let start_event = Event {
         id: sub_id.clone(),
         conversation_id: Some(sess.root_conversation_id()),
         task_id: Some(task_id),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window,
+        }),
     };
     if sess.tx_event.send(start_event).await.is_err() {
         return;
@@ -3242,7 +3298,8 @@ async fn handle_function_call(
                             output: FunctionCallOutputPayload {
                                 content: format!(
                                     "failed to read user_instruction_file '{}': {}",
-                                    abs.display(), e
+                                    abs.display(),
+                                    e
                                 ),
                                 success: Some(false),
                             },
@@ -3252,12 +3309,8 @@ async fn handle_function_call(
             }
             effective_ui.push_str(&args.user_instruction);
 
-            let target_id = sess.open_conversation_with(
-                None,
-                Some(effective_ui.clone()),
-                allow,
-                tools,
-            );
+            let target_id =
+                sess.open_conversation_with(None, Some(effective_ui.clone()), allow, tools);
 
             // 构造任务计划：先在新对话跑一轮，再在原对话注入闭合
             let mut input_items: Vec<InputItem> = Vec::new();
@@ -3499,7 +3552,8 @@ async fn handle_function_call(
                     };
                 }
             };
-            let result = SESSION_MANAGER
+            let result = sess
+                .session_manager
                 .handle_exec_command_request(exec_params)
                 .await;
             let function_call_output = crate::exec_command::result_into_payload(result);
@@ -3521,7 +3575,8 @@ async fn handle_function_call(
                     };
                 }
             };
-            let result = SESSION_MANAGER
+            let result = sess
+                .session_manager
                 .handle_write_stdin_request(write_stdin_params)
                 .await;
             let function_call_output: FunctionCallOutputPayload =
@@ -3855,13 +3910,17 @@ async fn handle_container_exec_with_params(
                 sandbox_type,
                 sandbox_policy: &turn_context.sandbox_policy,
                 codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
-                stdout_stream: Some(StdoutStream {
-                    sub_id: sub_id.clone(),
-                    call_id: call_id.clone(),
-                    tx_event: sess.tx_event.clone(),
-                    conversation_id: Some(conversation_id),
-                    task_id: sess.current_task_id(),
-                }),
+                stdout_stream: if exec_command_context.apply_patch.is_some() {
+                    None
+                } else {
+                    Some(StdoutStream {
+                        sub_id: sub_id.clone(),
+                        call_id: call_id.clone(),
+                        tx_event: sess.tx_event.clone(),
+                        conversation_id: Some(conversation_id),
+                        task_id: sess.current_task_id(),
+                    })
+                },
             },
         )
         .await;
@@ -3999,13 +4058,17 @@ async fn handle_sandbox_error(
                         sandbox_type: SandboxType::None,
                         sandbox_policy: &turn_context.sandbox_policy,
                         codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
-                        stdout_stream: Some(StdoutStream {
-                            sub_id: sub_id.clone(),
-                            call_id: call_id.clone(),
-                            tx_event: sess.tx_event.clone(),
-                            conversation_id: Some(exec_command_context.conversation_id),
-                            task_id: sess.current_task_id(),
-                        }),
+                        stdout_stream: if exec_command_context.apply_patch.is_some() {
+                            None
+                        } else {
+                            Some(StdoutStream {
+                                sub_id: sub_id.clone(),
+                                call_id: call_id.clone(),
+                                tx_event: sess.tx_event.clone(),
+                                conversation_id: Some(exec_command_context.conversation_id),
+                                task_id: sess.current_task_id(),
+                            })
+                        },
                     },
                 )
                 .await;
@@ -4233,15 +4296,9 @@ async fn drain_to_completed(
                 response_id: _,
                 token_usage,
             }) => {
-                let token_usage = match token_usage {
-                    Some(usage) => usage,
-                    None => {
-                        return Err(CodexErr::Stream(
-                            "token_usage was None in ResponseEvent::Completed".into(),
-                            None,
-                        ));
-                    }
-                };
+                // some providers don't return token usage, so we default
+                // TODO: consider approximate token usage
+                let token_usage = token_usage.unwrap_or_default();
                 sess.tx_event
                     .send(Event {
                         id: sub_id.to_string(),
@@ -4251,6 +4308,7 @@ async fn drain_to_completed(
                     })
                     .await
                     .ok();
+
                 return Ok(());
             }
             Ok(_) => continue,
@@ -4918,6 +4976,9 @@ pub async fn invoke_conv_tool_for_cli(
         &sess.root_conversation,
         &TurnContext {
             client: turn_context.client.clone(),
+            tools_config: turn_context.tools_config.clone(),
+            user_instructions: turn_context.user_instructions.clone(),
+            base_instructions: turn_context.base_instructions.clone(),
             cwd: turn_context.cwd.clone(),
             approval_policy: turn_context.approval_policy,
             sandbox_policy: turn_context.sandbox_policy.clone(),

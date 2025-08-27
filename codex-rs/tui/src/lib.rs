@@ -46,6 +46,7 @@ pub mod live_wrap;
 mod markdown;
 mod markdown_stream;
 pub mod onboarding;
+mod pager_overlay;
 mod render;
 mod session_log;
 mod shimmer;
@@ -53,7 +54,6 @@ mod slash_command;
 mod status_indicator_widget;
 mod streaming;
 mod text_formatting;
-mod transcript_app;
 mod tui;
 mod user_approval_widget;
 
@@ -118,31 +118,42 @@ pub async fn run_main(
     let cwd = cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p));
 
     // Resolve optional user instructions override from CLI string or file
-    let user_instructions_from_file: Option<String> = if let Some(p) = cli.instructions_file.as_ref() {
-        // Resolve relative path against the effective cwd (if provided), else process cwd
-        let resolved = if let Some(cwd) = cli.cwd.as_ref() {
-            let abs = if p.is_absolute() { p.clone() } else { cwd.join(p) };
-            abs
-        } else {
-            // Fall back to current_dir if no --cd provided
-            let base = std::env::current_dir().unwrap_or_default();
-            if p.is_absolute() { p.clone() } else { base.join(p) }
-        };
-        match std::fs::read_to_string(&resolved) {
-            Ok(s) => Some(s),
-            Err(e) => {
-                #[allow(clippy::print_stderr)]
-                {
-                    eprintln!(
-                        "Error reading --instructions-file '{}': {}",
-                        resolved.display(),
-                        e
-                    );
+    let user_instructions_from_file: Option<String> =
+        if let Some(p) = cli.instructions_file.as_ref() {
+            // Resolve relative path against the effective cwd (if provided), else process cwd
+            let resolved = if let Some(cwd) = cli.cwd.as_ref() {
+                let abs = if p.is_absolute() {
+                    p.clone()
+                } else {
+                    cwd.join(p)
+                };
+                abs
+            } else {
+                // Fall back to current_dir if no --cd provided
+                let base = std::env::current_dir().unwrap_or_default();
+                if p.is_absolute() {
+                    p.clone()
+                } else {
+                    base.join(p)
                 }
-                std::process::exit(1);
+            };
+            match std::fs::read_to_string(&resolved) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    #[allow(clippy::print_stderr)]
+                    {
+                        eprintln!(
+                            "Error reading --instructions-file '{}': {}",
+                            resolved.display(),
+                            e
+                        );
+                    }
+                    std::process::exit(1);
+                }
             }
-        }
-    } else { None };
+        } else {
+            None
+        };
     let user_instructions_override = user_instructions_from_file;
 
     let overrides = ConfigOverrides {

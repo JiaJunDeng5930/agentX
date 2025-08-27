@@ -1,6 +1,7 @@
 use codex_core::protocol::TokenUsage;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -29,6 +30,8 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
+use crate::clipboard_paste::normalize_pasted_path;
+use crate::clipboard_paste::pasted_image_format;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -155,7 +158,7 @@ impl ChatComposer {
             ActivePopup::None => 1,
         };
         let [textarea_rect, _] =
-            Layout::vertical([Constraint::Min(0), Constraint::Max(popup_height)]).areas(area);
+            Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
         let mut textarea_rect = textarea_rect;
         textarea_rect.width = textarea_rect.width.saturating_sub(1);
         textarea_rect.x += 1;
@@ -220,6 +223,8 @@ impl ChatComposer {
             let placeholder = format!("[Pasted Content {char_count} chars]");
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
+        } else if self.handle_paste_image_path(pasted.clone()) {
+            self.textarea.insert_str(" ");
         } else {
             self.textarea.insert_str(&pasted);
         }
@@ -230,6 +235,39 @@ impl ChatComposer {
         self.sync_command_popup();
         self.sync_file_search_popup();
         true
+    }
+
+    pub fn handle_paste_image_path(&mut self, pasted: String) -> bool {
+        let Some(path_buf) = normalize_pasted_path(&pasted) else {
+            return false;
+        };
+
+        match image::image_dimensions(&path_buf) {
+            Ok((w, h)) => {
+                tracing::info!("OK: {pasted}");
+                let format_label = pasted_image_format(&path_buf).label();
+                self.attach_image(path_buf, w, h, format_label);
+                true
+            }
+            Err(err) => {
+                tracing::info!("ERR: {err}");
+                false
+            }
+        }
+    }
+
+    /// Replace the entire composer content with `text` and reset cursor.
+    pub(crate) fn set_text_content(&mut self, text: String) {
+        self.textarea.set_text(&text);
+        self.textarea.set_cursor(0);
+        self.sync_command_popup();
+        self.sync_file_search_popup();
+    }
+
+    /// Get the current composer text.
+    #[cfg(test)]
+    pub(crate) fn current_text(&self) -> String {
+        self.textarea.text().to_string()
     }
 
     pub fn attach_image(&mut self, path: PathBuf, width: u32, height: u32, format_label: &str) {
@@ -293,6 +331,11 @@ impl ChatComposer {
         result
     }
 
+    /// Return true if either the slash-command popup or the file-search popup is active.
+    pub(crate) fn popup_active(&self) -> bool {
+        !matches!(self.active_popup, ActivePopup::None)
+    }
+
     /// Handle key event when the slash-command popup is visible.
     fn handle_key_event_with_slash_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         let ActivePopup::Command(popup) = &mut self.active_popup else {
@@ -311,6 +354,13 @@ impl ChatComposer {
                 ..
             } => {
                 popup.move_down();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                // Dismiss the slash popup; keep the current input untouched.
+                self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
             }
             KeyEvent {
@@ -356,6 +406,33 @@ impl ChatComposer {
             }
             input => self.handle_input_basic(input),
         }
+    }
+    #[inline]
+    fn clamp_to_char_boundary(text: &str, pos: usize) -> usize {
+        let mut p = pos.min(text.len());
+        if p < text.len() && !text.is_char_boundary(p) {
+            p = text
+                .char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i <= p)
+                .last()
+                .unwrap_or(0);
+        }
+        p
+    }
+
+    #[inline]
+    fn handle_non_ascii_char(&mut self, input: KeyEvent) -> (InputResult, bool) {
+        if !self.paste_burst_buffer.is_empty() || self.in_paste_burst_mode {
+            let pasted = std::mem::take(&mut self.paste_burst_buffer);
+            self.in_paste_burst_mode = false;
+            self.handle_paste(pasted);
+        }
+        self.textarea.input(input);
+        let text_after = self.textarea.text();
+        self.pending_pastes
+            .retain(|(placeholder, _)| text_after.contains(placeholder));
+        (InputResult::None, true)
     }
 
     /// Handle key events when file search popup is visible.
@@ -412,8 +489,10 @@ impl ChatComposer {
                         // using the flat text and byte-offset cursor API.
                         let cursor_offset = self.textarea.cursor();
                         let text = self.textarea.text();
-                        let before_cursor = &text[..cursor_offset];
-                        let after_cursor = &text[cursor_offset..];
+                        // Clamp to a valid char boundary to avoid panics when slicing.
+                        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+                        let before_cursor = &text[..safe_cursor];
+                        let after_cursor = &text[safe_cursor..];
 
                         // Determine token boundaries in the full text.
                         let start_idx = before_cursor
@@ -426,7 +505,7 @@ impl ChatComposer {
                             .find(|(_, c)| c.is_whitespace())
                             .map(|(idx, _)| idx)
                             .unwrap_or(after_cursor.len());
-                        let end_idx = cursor_offset + end_rel_idx;
+                        let end_idx = safe_cursor + end_rel_idx;
 
                         self.textarea.replace_range(start_idx..end_idx, "");
                         self.textarea.set_cursor(start_idx);
@@ -574,9 +653,11 @@ impl ChatComposer {
     fn insert_selected_path(&mut self, path: &str) {
         let cursor_offset = self.textarea.cursor();
         let text = self.textarea.text();
+        // Clamp to a valid char boundary to avoid panics when slicing.
+        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
 
-        let before_cursor = &text[..cursor_offset];
-        let after_cursor = &text[cursor_offset..];
+        let before_cursor = &text[..safe_cursor];
+        let after_cursor = &text[safe_cursor..];
 
         // Determine token boundaries.
         let start_idx = before_cursor
@@ -590,7 +671,7 @@ impl ChatComposer {
             .find(|(_, c)| c.is_whitespace())
             .map(|(idx, _)| idx)
             .unwrap_or(after_cursor.len());
-        let end_idx = cursor_offset + end_rel_idx;
+        let end_idx = safe_cursor + end_rel_idx;
 
         // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
         let mut new_text =
@@ -608,6 +689,15 @@ impl ChatComposer {
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         match key_event {
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.is_empty() => {
+                self.app_event_tx.send(AppEvent::ExitRequest);
+                (InputResult::None, true)
+            }
             // -------------------------------------------------------------
             // History navigation (Up / Down) – only when the composer is not
             // empty or when the cursor is at the correct position, to avoid
@@ -704,13 +794,6 @@ impl ChatComposer {
                 }
                 self.pending_pastes.clear();
 
-                // Strip image placeholders from the submitted text; images are retrieved via take_recent_submission_images()
-                for img in &self.attached_images {
-                    if text.contains(&img.placeholder) {
-                        text = text.replace(&img.placeholder, "");
-                    }
-                }
-
                 text = text.trim().to_string();
                 if !text.is_empty() {
                     self.history.record_local_submission(&text);
@@ -756,6 +839,13 @@ impl ChatComposer {
             let has_ctrl_or_alt =
                 modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT);
             if !has_ctrl_or_alt {
+                // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts and be
+                // misclassified by our non-bracketed paste heuristic. To avoid leaving
+                // residual buffered content or misdetecting a paste, flush any burst buffer
+                // and insert non-ASCII characters directly.
+                if !ch.is_ascii() {
+                    return self.handle_non_ascii_char(input);
+                }
                 // Update burst heuristics.
                 match self.last_plain_char_time {
                     Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
@@ -890,8 +980,9 @@ impl ChatComposer {
     /// Attempts to remove an image or paste placeholder if the cursor is at the end of one.
     /// Returns true if a placeholder was removed.
     fn try_remove_any_placeholder_at_cursor(&mut self) -> bool {
-        let p = self.textarea.cursor();
+        // Clamp the cursor to a valid char boundary to avoid panics when slicing.
         let text = self.textarea.text();
+        let p = Self::clamp_to_char_boundary(text, self.textarea.cursor());
 
         // Try image placeholders first
         let mut out: Option<(usize, String)> = None;
@@ -903,7 +994,7 @@ impl ChatComposer {
                 continue;
             }
             let start = p - ph.len();
-            if text[start..p] != *ph {
+            if text.get(start..p) != Some(ph.as_str()) {
                 continue;
             }
 
@@ -911,7 +1002,11 @@ impl ChatComposer {
             let mut occ_before = 0usize;
             let mut search_pos = 0usize;
             while search_pos < start {
-                if let Some(found) = text[search_pos..start].find(ph) {
+                let segment = match text.get(search_pos..start) {
+                    Some(s) => s,
+                    None => break,
+                };
+                if let Some(found) = segment.find(ph) {
                     occ_before += 1;
                     search_pos += found + ph.len();
                 } else {
@@ -947,7 +1042,7 @@ impl ChatComposer {
                 if p + ph.len() > text.len() {
                     continue;
                 }
-                if &text[p..p + ph.len()] != ph {
+                if text.get(p..p + ph.len()) != Some(ph.as_str()) {
                     continue;
                 }
 
@@ -955,7 +1050,11 @@ impl ChatComposer {
                 let mut occ_before = 0usize;
                 let mut search_pos = 0usize;
                 while search_pos < p {
-                    if let Some(found) = text[search_pos..p].find(ph) {
+                    let segment = match text.get(search_pos..p) {
+                        Some(s) => s,
+                        None => break 'out None,
+                    };
+                    if let Some(found) = segment.find(ph) {
                         occ_before += 1;
                         search_pos += found + ph.len();
                     } else {
@@ -990,7 +1089,7 @@ impl ChatComposer {
                 return None;
             }
             let start = p - ph.len();
-            if text[start..p] == *ph {
+            if text.get(start..p) == Some(ph.as_str()) {
                 Some(ph.clone())
             } else {
                 None
@@ -1006,7 +1105,7 @@ impl ChatComposer {
             if p + ph.len() > text.len() {
                 return None;
             }
-            if &text[p..p + ph.len()] == ph {
+            if text.get(p..p + ph.len()) == Some(ph.as_str()) {
                 Some(ph.clone())
             } else {
                 None
@@ -1099,7 +1198,7 @@ impl ChatComposer {
     }
 }
 
-impl WidgetRef for &ChatComposer {
+impl WidgetRef for ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let popup_height = match &self.active_popup {
             ActivePopup::Command(popup) => popup.calculate_required_height(),
@@ -1107,7 +1206,7 @@ impl WidgetRef for &ChatComposer {
             ActivePopup::None => 1,
         };
         let [textarea_rect, popup_rect] =
-            Layout::vertical([Constraint::Min(0), Constraint::Max(popup_height)]).areas(area);
+            Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
@@ -1210,7 +1309,10 @@ impl WidgetRef for &ChatComposer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::ImageBuffer;
+    use image::Rgba;
     use std::path::PathBuf;
+    use tempfile::tempdir;
 
     use crate::app_event::AppEvent;
     use crate::bottom_pane::AppEventSender;
@@ -1496,7 +1598,7 @@ mod tests {
             }
 
             terminal
-                .draw(|f| f.render_widget_ref(&composer, f.area()))
+                .draw(|f| f.render_widget_ref(composer, f.area()))
                 .unwrap_or_else(|e| panic!("Failed to draw {name} composer: {e}"));
 
             assert_snapshot!(name, terminal.backend());
@@ -1793,7 +1895,7 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, "hi"),
+            InputResult::Submitted(text) => assert_eq!(text, "[image 32x16 PNG] hi"),
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
@@ -1811,7 +1913,7 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert!(text.is_empty()),
+            InputResult::Submitted(text) => assert_eq!(text, "[image 10x5 PNG]"),
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
@@ -1853,6 +1955,31 @@ mod tests {
     }
 
     #[test]
+    fn backspace_with_multibyte_text_before_placeholder_does_not_panic() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+
+        // Insert an image placeholder at the start
+        let path = PathBuf::from("/tmp/image_multibyte.png");
+        composer.attach_image(path, 10, 5, "PNG");
+        // Add multibyte text after the placeholder
+        composer.textarea.insert_str("日本語");
+
+        // Cursor is at end; pressing backspace should delete the last character
+        // without panicking and leave the placeholder intact.
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        assert_eq!(composer.attached_images.len(), 1);
+        assert!(composer.textarea.text().starts_with("[image 10x5 PNG]"));
+    }
+
+    #[test]
     fn deleting_one_of_duplicate_image_placeholders_removes_matching_entry() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
@@ -1886,5 +2013,26 @@ mod tests {
             composer.attached_images,
             "one image mapping remains"
         );
+    }
+
+    #[test]
+    fn pasting_filepath_attaches_image() {
+        let tmp = tempdir().expect("create TempDir");
+        let tmp_path: PathBuf = tmp.path().join("codex_tui_test_paste_image.png");
+        let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(3, 2, |_x, _y| Rgba([1, 2, 3, 255]));
+        img.save(&tmp_path).expect("failed to write temp png");
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+
+        let needs_redraw = composer.handle_paste(tmp_path.to_string_lossy().to_string());
+        assert!(needs_redraw);
+        assert!(composer.textarea.text().starts_with("[image 3x2 PNG] "));
+
+        let imgs = composer.take_recent_submission_images();
+        assert_eq!(imgs, vec![tmp_path.clone()]);
     }
 }

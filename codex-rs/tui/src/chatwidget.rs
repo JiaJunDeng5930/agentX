@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -30,8 +31,10 @@ use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_protocol::parse_command::ParsedCommand;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -100,8 +103,6 @@ pub(crate) struct ChatWidget {
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
-    // Whether a redraw is needed after handling the current event
-    needs_redraw: bool,
     // Accumulates the current reasoning block text to extract a header
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
@@ -111,8 +112,8 @@ pub(crate) struct ChatWidget {
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
     last_history_was_exec: bool,
-    // Currently active conversation id for the running task (if any)
-    active_conv_id: Option<Uuid>,
+    // User messages queued while a turn is in progress
+    queued_user_messages: VecDeque<UserMessage>,
 }
 
 struct UserMessage {
@@ -138,10 +139,6 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
-    #[inline]
-    fn mark_needs_redraw(&mut self) {
-        self.needs_redraw = true;
-    }
     fn flush_answer_stream_with_separator(&mut self) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         let _ = self.stream.finalize(true, &sink);
@@ -159,14 +156,14 @@ impl ChatWidget {
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_agent_message(&mut self, message: String) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         let finished = self.stream.apply_final_answer(&message, &sink);
         self.handle_if_stream_finished(finished);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
@@ -185,7 +182,7 @@ impl ChatWidget {
         } else {
             // Fallback while we don't yet have a bold header: leave existing header as-is.
         }
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_agent_reasoning_final(&mut self) {
@@ -199,7 +196,7 @@ impl ChatWidget {
         }
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_reasoning_section_break(&mut self) {
@@ -217,7 +214,7 @@ impl ChatWidget {
         self.stream.reset_headers_for_new_turn();
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_task_complete(&mut self) {
@@ -230,7 +227,10 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
-        self.mark_needs_redraw();
+        self.request_redraw();
+
+        // If there is a queued user message, send exactly one now to begin the next turn.
+        self.maybe_send_next_queued_input();
     }
 
     fn on_token_count(&mut self, token_usage: TokenUsage) {
@@ -243,12 +243,49 @@ impl ChatWidget {
         );
     }
 
-    fn on_error(&mut self, message: String) {
+    /// Finalize any active exec as failed, push an error message into history,
+    /// and stop/clear running UI state.
+    fn finalize_turn_with_error_message(&mut self, message: String) {
+        // Ensure any spinner is replaced by a red ✗ and flushed into history.
+        self.finalize_active_exec_cell_as_failed();
+        // Emit the provided error message/history cell.
         self.add_to_history(history_cell::new_error_event(message));
+        // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.stream.clear_all();
-        self.mark_needs_redraw();
+    }
+
+    fn on_error(&mut self, message: String) {
+        self.finalize_turn_with_error_message(message);
+        self.request_redraw();
+
+        // After an error ends the turn, try sending the next queued input.
+        self.maybe_send_next_queued_input();
+    }
+
+    /// Handle a turn aborted due to user interrupt (Esc).
+    /// When there are queued user messages, restore them into the composer
+    /// separated by newlines rather than auto‑submitting the next one.
+    fn on_interrupted_turn(&mut self) {
+        // Finalize, log a gentle prompt, and clear running state.
+        self.finalize_turn_with_error_message("Tell the model what to do differently".to_owned());
+
+        // If any messages were queued during the task, restore them into the composer.
+        if !self.queued_user_messages.is_empty() {
+            let combined = self
+                .queued_user_messages
+                .iter()
+                .map(|m| m.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.bottom_pane.set_composer_text(combined);
+            // Clear the queue and update the status indicator list.
+            self.queued_user_messages.clear();
+            self.refresh_queued_user_messages();
+        }
+
+        self.request_redraw();
     }
 
     fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
@@ -351,7 +388,7 @@ impl ChatWidget {
     fn on_stream_error(&mut self, message: String) {
         // Show stream errors in the transcript so users see retry/backoff info.
         self.add_to_history(history_cell::new_stream_error_event(message));
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
     /// Periodic tick to commit at most one queued line to history with a small delay,
     /// animating the output.
@@ -405,7 +442,7 @@ impl ChatWidget {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         self.stream.begin(&sink);
         self.stream.push_and_maybe_commit(&delta, &sink);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
@@ -463,7 +500,7 @@ impl ChatWidget {
             reason: ev.reason,
         };
         self.bottom_pane.push_approval_request(request);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn handle_apply_patch_approval_now(
@@ -483,7 +520,7 @@ impl ChatWidget {
             grant_root: ev.grant_root,
         };
         self.bottom_pane.push_approval_request(request);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
@@ -511,7 +548,7 @@ impl ChatWidget {
         }
 
         // Request a redraw so the working header and command list are visible immediately.
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
@@ -531,17 +568,7 @@ impl ChatWidget {
             ev.result,
         ));
     }
-    fn interrupt_running_task(&mut self) {
-        if self.bottom_pane.is_task_running() {
-            self.active_exec_cell = None;
-            self.running_commands.clear();
-            self.bottom_pane.clear_ctrl_c_quit_hint();
-            self.submit_op(Op::Interrupt);
-            self.bottom_pane.set_task_running(false);
-            self.stream.clear_all();
-            self.request_redraw();
-        }
-    }
+
     fn layout_areas(&self, area: Rect) -> [Rect; 2] {
         Layout::vertical([
             Constraint::Max(
@@ -591,12 +618,11 @@ impl ChatWidget {
             pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
-            needs_redraw: false,
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             session_id: None,
-            active_conv_id: None,
             last_history_was_exec: false,
+            queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
         }
     }
@@ -637,12 +663,11 @@ impl ChatWidget {
             pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
-            needs_redraw: false,
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             session_id: None,
-            active_conv_id: None,
             last_history_was_exec: false,
+            queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
         }
     }
@@ -656,22 +681,57 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if key_event.kind == KeyEventKind::Press {
-            self.bottom_pane.clear_ctrl_c_quit_hint();
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                self.on_ctrl_c();
+                return;
+            }
+            other if other.kind == KeyEventKind::Press => {
+                self.bottom_pane.clear_ctrl_c_quit_hint();
+            }
+            _ => {}
         }
 
-        match self.bottom_pane.handle_key_event(key_event) {
-            InputResult::Submitted(text) => {
-                let images = self.bottom_pane.take_recent_submission_images();
-                self.submit_user_message(UserMessage {
-                    text,
-                    image_paths: images,
-                });
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::ALT,
+                kind: KeyEventKind::Press,
+                ..
+            } if !self.queued_user_messages.is_empty() => {
+                // Prefer the most recently queued item.
+                if let Some(user_message) = self.queued_user_messages.pop_back() {
+                    self.bottom_pane.set_composer_text(user_message.text);
+                    self.refresh_queued_user_messages();
+                    self.request_redraw();
+                }
             }
-            InputResult::Command(cmd) => {
-                self.dispatch_command(cmd);
+            _ => {
+                match self.bottom_pane.handle_key_event(key_event) {
+                    InputResult::Submitted(text) => {
+                        // If a task is running, queue the user input to be sent after the turn completes.
+                        let user_message = UserMessage {
+                            text,
+                            image_paths: self.bottom_pane.take_recent_submission_images(),
+                        };
+                        if self.bottom_pane.is_task_running() {
+                            self.queued_user_messages.push_back(user_message);
+                            self.refresh_queued_user_messages();
+                        } else {
+                            self.submit_user_message(user_message);
+                        }
+                    }
+                    InputResult::Command(cmd) => {
+                        self.dispatch_command(cmd);
+                    }
+                    InputResult::None => {}
+                }
             }
-            InputResult::None => {}
         }
     }
 
@@ -874,18 +934,11 @@ impl ChatWidget {
 
         // Only show the text portion in conversation history.
         if !text.is_empty() {
-            let short = self.active_conv_id.map(|u| {
-                let s = u.as_simple().to_string();
-                let n = s.len().min(8);
-                s[..n].to_string()
-            });
-            self.add_to_history(history_cell::new_user_prompt(text.clone(), short));
+            self.add_to_history(history_cell::new_user_prompt(text.clone(), None));
         }
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
-        // Reset redraw flag for this dispatch
-        self.needs_redraw = false;
         let Event { id, msg, .. } = event;
 
         match msg {
@@ -912,39 +965,21 @@ impl ChatWidget {
                 self.on_agent_reasoning_final()
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TaskStarted => {
-                // Start status view, then show conv id so the widget is present.
-                self.on_task_started();
-                self.active_conv_id = event.conversation_id;
-                self.bottom_pane.set_active_conv_id(self.active_conv_id);
-                // Also update stream header with current conversation short id.
-                let short = self.active_conv_id.map(|u| {
-                    let s = u.as_simple().to_string();
-                    let n = s.len().min(8);
-                    s[..n].to_string()
-                });
-                self.stream.set_conv_short_id(short);
-            }
-            EventMsg::TaskComplete(TaskCompleteEvent { .. }) => {
-                self.on_task_complete();
-                self.active_conv_id = None;
-                self.bottom_pane.set_active_conv_id(None);
-                self.stream.set_conv_short_id(None);
-            }
+            EventMsg::TaskStarted(_) => self.on_task_started(),
+            EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
+            EventMsg::TaskStarted(_) => self.on_task_started(),
+            EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
             EventMsg::TokenCount(token_usage) => self.on_token_count(token_usage),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
-                    self.on_error("Tell the model what to do differently".to_owned())
+                    self.on_interrupted_turn();
                 }
                 TurnAbortReason::Replaced => {
                     // Show a lightweight hint in the status indicator rather than logging an error cell.
-                    self.bottom_pane.update_status_text(
+                    self.bottom_pane.update_status_header(
                         "当前任务被 conv.* 工具替换，正在运行目标会话，随后承接原逻辑".to_string(),
                     );
-                    // Clear local active id until next TaskStarted arrives
-                    self.active_conv_id = None;
-                    self.bottom_pane.set_active_conv_id(None);
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
@@ -972,27 +1007,50 @@ impl ChatWidget {
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
             }
         }
-        // Coalesce redraws: issue at most one after handling the event
-        if self.needs_redraw {
-            self.request_redraw();
-            self.needs_redraw = false;
-        }
     }
 
     fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
     }
 
+    /// Mark the active exec cell as failed (✗) and flush it into history.
+    fn finalize_active_exec_cell_as_failed(&mut self) {
+        if let Some(cell) = self.active_exec_cell.take() {
+            let cell = cell.into_failed();
+            // Insert finalized exec into history and keep grouping consistent.
+            self.add_to_history(cell);
+            self.last_history_was_exec = true;
+        }
+    }
+
+    // If idle and there are queued inputs, submit exactly one to start the next turn.
+    fn maybe_send_next_queued_input(&mut self) {
+        if self.bottom_pane.is_task_running() {
+            return;
+        }
+        if let Some(user_message) = self.queued_user_messages.pop_front() {
+            self.submit_user_message(user_message);
+        }
+        // Update the list to reflect the remaining queued messages (if any).
+        self.refresh_queued_user_messages();
+    }
+
+    /// Rebuild and update the queued user messages from the current queue.
+    fn refresh_queued_user_messages(&mut self) {
+        let messages: Vec<String> = self
+            .queued_user_messages
+            .iter()
+            .map(|m| m.text.clone())
+            .collect();
+        self.bottom_pane.set_queued_user_messages(messages);
+    }
+
     pub(crate) fn add_diff_in_progress(&mut self) {
-        self.bottom_pane.set_task_running(true);
-        self.bottom_pane
-            .update_status_text("computing diff".to_string());
         self.request_redraw();
     }
 
     pub(crate) fn on_diff_complete(&mut self) {
-        self.bottom_pane.set_task_running(false);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn add_status_output(&mut self) {
@@ -1119,27 +1177,27 @@ impl ChatWidget {
     }
 
     /// Handle Ctrl-C key press.
-    /// Returns CancellationEvent::Handled if the event was consumed by the UI, or
-    /// CancellationEvent::Ignored if the caller should handle it (e.g. exit).
-    pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
-        match self.bottom_pane.on_ctrl_c() {
-            CancellationEvent::Handled => return CancellationEvent::Handled,
-            CancellationEvent::Ignored => {}
-        }
-        if self.bottom_pane.is_task_running() {
-            self.interrupt_running_task();
-            CancellationEvent::Ignored
-        } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
-            self.submit_op(Op::Shutdown);
-            CancellationEvent::Handled
-        } else {
-            self.bottom_pane.show_ctrl_c_quit_hint();
-            CancellationEvent::Ignored
+    fn on_ctrl_c(&mut self) {
+        if self.bottom_pane.on_ctrl_c() == CancellationEvent::Ignored {
+            if self.bottom_pane.is_task_running() {
+                self.submit_op(Op::Interrupt);
+            } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
+                self.submit_op(Op::Shutdown);
+            } else {
+                self.bottom_pane.show_ctrl_c_quit_hint();
+            }
         }
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.bottom_pane.composer_is_empty()
+    }
+
+    /// True when the UI is in the regular composer state with no running task,
+    /// no modal overlay (e.g. approvals or status indicator), and no composer popups.
+    /// In this state Esc-Esc backtracking is enabled.
+    pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
+        self.bottom_pane.is_normal_backtrack_mode()
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
