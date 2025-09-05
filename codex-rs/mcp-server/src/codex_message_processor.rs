@@ -624,6 +624,8 @@ impl CodexMessageProcessor {
             }) => {
                 let event = codex_core::protocol::Event {
                     id: "".to_string(),
+                    conversation_id: Some(conversation_id),
+                    task_id: None,
                     msg: codex_core::protocol::EventMsg::SessionConfigured(
                         session_configured.clone(),
                     ),

@@ -9,6 +9,7 @@ mod apply_patch;
 pub mod auth;
 mod bash;
 mod chat_completions;
+mod cli_tools;
 mod client;
 mod client_common;
 pub mod codex;
@@ -77,7 +78,8 @@ pub use codex_protocol::protocol;
 // Re-export protocol config enums to ensure call sites can use the same types
 // as those in the protocol crate when constructing protocol messages.
 pub use codex_protocol::config_types as protocol_config_types;
-// (removed) conv_* CLI invocation helper is not present upstream; rely on tool calls.
+// Public helper used by the CLI to invoke conv_* tools programmatically.
+pub use crate::cli_tools::invoke_conv_tool_for_cli;
 
 // Re-export selected client interfaces introduced upstream
 pub use client::ModelClient;

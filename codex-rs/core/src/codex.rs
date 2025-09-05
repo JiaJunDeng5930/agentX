@@ -1857,30 +1857,30 @@ async fn try_run_turn(
                 return Ok(output);
             }
             ResponseEvent::OutputTextDelta(delta) => {
-            let event = Event {
-                id: sub_id.to_string(),
-                conversation_id: Some(sess.session_id),
-                task_id: None,
-                msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
-            };
+                let event = Event {
+                    id: sub_id.to_string(),
+                    conversation_id: Some(sess.session_id),
+                    task_id: None,
+                    msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+                };
                 sess.tx_event.send(event).await.ok();
             }
             ResponseEvent::ReasoningSummaryDelta(delta) => {
-            let event = Event {
-                id: sub_id.to_string(),
-                conversation_id: Some(sess.session_id),
-                task_id: None,
-                msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }),
-            };
+                let event = Event {
+                    id: sub_id.to_string(),
+                    conversation_id: Some(sess.session_id),
+                    task_id: None,
+                    msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }),
+                };
                 sess.tx_event.send(event).await.ok();
             }
             ResponseEvent::ReasoningSummaryPartAdded => {
-            let event = Event {
-                id: sub_id.to_string(),
-                conversation_id: Some(sess.session_id),
-                task_id: None,
-                msg: EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {}),
-            };
+                let event = Event {
+                    id: sub_id.to_string(),
+                    conversation_id: Some(sess.session_id),
+                    task_id: None,
+                    msg: EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {}),
+                };
                 sess.tx_event.send(event).await.ok();
             }
             ResponseEvent::ReasoningContentDelta(delta) => {
