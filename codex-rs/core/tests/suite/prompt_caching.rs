@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
@@ -12,7 +13,6 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::default_user_shell;
-use codex_login::CodexAuth;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::wait_for_event;
@@ -190,8 +190,8 @@ async fn prompt_tools_are_consistent_across_requests() {
 
     let expected_instructions: &str = include_str!("../../prompt.md");
     // our internal implementation is responsible for keeping tools in sync
-    // with the OpenAI schema, so we just verify the tool presence here
-    // conv_* tools are exposed when using the Responses API.
+    // with the OpenAI schema, so we just verify the tool presence here.
+    // Expect both conv_* and common tools to be present when enabled.
     let expected_tools_names: &[&str] = &[
         "conv_create",
         "conv_send",
@@ -201,6 +201,7 @@ async fn prompt_tools_are_consistent_across_requests() {
         "shell",
         "update_plan",
         "apply_patch",
+        "view_image",
     ];
     let body0 = requests[0].body_json::<serde_json::Value>().unwrap();
     assert_eq!(
@@ -290,7 +291,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 {}</environment_context>"#,
         cwd.path().to_string_lossy(),
         match shell.name() {
-            Some(name) => format!("  <shell>{}</shell>\n", name),
+            Some(name) => format!("  <shell>{name}</shell>\n"),
             None => String::new(),
         }
     );
