@@ -86,16 +86,20 @@ fn final_answer_without_newline_is_flushed_immediately() {
     terminal.set_viewport_area(viewport);
 
     // Simulate a streaming answer without any newline characters.
-    chat.handle_codex_event(Event {
+    chat.handle_codex_event(Event { conversation_id: None, task_id: None,
         id: "sub-a".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
             delta: "Hi! How can I help with codex-rs or anything else today?".into(),
         }),
     });
 
     // Now simulate the final AgentMessage which should flush the pending line immediately.
-    chat.handle_codex_event(Event {
+    chat.handle_codex_event(Event { conversation_id: None, task_id: None,
         id: "sub-a".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Hi! How can I help with codex-rs or anything else today?".into(),
         }),
@@ -230,6 +234,8 @@ fn make_chatwidget_manual() -> (
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         session_id: None,
+        last_history_was_exec: false,
+        active_conv_id: None,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: std::collections::VecDeque::new(),
@@ -375,6 +381,8 @@ fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
             .collect();
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: call_id.to_string(),
             command,
@@ -392,6 +400,8 @@ fn end_exec(chat: &mut ChatWidget, call_id: &str, stdout: &str, stderr: &str, ex
     };
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: call_id.to_string(),
             stdout: stdout.to_string(),
@@ -548,6 +558,8 @@ fn interrupt_exec_marks_failed_snapshot() {
     // cause the active exec cell to be finalized as failed and flushed.
     chat.handle_codex_event(Event {
         id: "call-int".into(),
+        conversation_id: None,
+        task_id: None,
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
             reason: TurnAbortReason::Interrupted,
         }),

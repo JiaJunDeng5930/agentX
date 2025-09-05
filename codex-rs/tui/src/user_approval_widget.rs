@@ -118,11 +118,12 @@ impl UserApprovalWidget {
                 command, reason, ..
             } => {
                 let cmd = strip_bash_lc_and_escape(command);
-                let mut contents: Vec<Line> = to_command_display(
-                    vec!["? ".fg(Color::Cyan), "agentx wants to run ".bold()],
-                    cmd,
-                    vec![],
-                );
+                let mut contents: Vec<Line> = Vec::new();
+                contents.push(Line::from(vec![
+                    "? ".fg(Color::Cyan),
+                    "agentx wants to run ".bold(),
+                    cmd.clone().dim(),
+                ]));
                 contents.push(Line::from(""));
                 if let Some(reason) = reason {
                     contents.push(Line::from(reason.clone().italic()));

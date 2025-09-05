@@ -416,6 +416,8 @@ impl Session {
                 error!("{message}");
                 post_session_configured_error_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
+                    conversation_id: Some(session_id),
+                    task_id: None,
                     msg: EventMsg::Error(ErrorEvent { message }),
                 });
                 (McpConnectionManager::default(), Default::default())
@@ -429,6 +431,8 @@ impl Session {
                 error!("{message}");
                 post_session_configured_error_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
+                    conversation_id: Some(session_id),
+                    task_id: None,
                     msg: EventMsg::Error(ErrorEvent { message }),
                 });
             }
@@ -455,6 +459,7 @@ impl Session {
                 include_web_search_request: config.tools_web_search_request,
                 use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                 include_view_image_tool: config.include_view_image_tool,
+                include_conv_tools: true,
             }),
             user_instructions,
             base_instructions,
@@ -486,6 +491,8 @@ impl Session {
 
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
+            conversation_id: Some(session_id),
+            task_id: None,
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id,
                 model,
@@ -510,6 +517,14 @@ impl Session {
             current_task.abort(TurnAbortReason::Replaced);
         }
         state.current_task = Some(task);
+    }
+
+    pub fn root_conversation_id(&self) -> Uuid {
+        self.session_id
+    }
+
+    pub fn current_task_id(&self) -> Option<Uuid> {
+        None
     }
 
     pub fn remove_task(&self, sub_id: &str) {
@@ -597,6 +612,8 @@ impl Session {
 
         let event = Event {
             id: event_id,
+            conversation_id: Some(self.session_id),
+            task_id: None,
             msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                 call_id,
                 command,
@@ -629,6 +646,8 @@ impl Session {
 
         let event = Event {
             id: event_id,
+            conversation_id: Some(self.session_id),
+            task_id: None,
             msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                 call_id,
                 changes: convert_apply_patch_to_protocol(action),
@@ -724,6 +743,8 @@ impl Session {
         };
         let event = Event {
             id: sub_id.to_string(),
+            conversation_id: Some(self.session_id),
+            task_id: None,
             msg,
         };
         let _ = self.tx_event.send(event).await;
@@ -771,6 +792,8 @@ impl Session {
 
         let event = Event {
             id: sub_id.to_string(),
+            conversation_id: Some(self.session_id),
+            task_id: None,
             msg,
         };
         let _ = self.tx_event.send(event).await;
@@ -783,6 +806,8 @@ impl Session {
                 let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
                 let event = Event {
                     id: sub_id.into(),
+                    conversation_id: Some(self.session_id),
+                    task_id: None,
                     msg,
                 };
                 let _ = self.tx_event.send(event).await;
@@ -847,6 +872,8 @@ impl Session {
     async fn notify_background_event(&self, sub_id: &str, message: impl Into<String>) {
         let event = Event {
             id: sub_id.to_string(),
+            conversation_id: Some(self.session_id),
+            task_id: None,
             msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
                 message: message.into(),
             }),
@@ -857,6 +884,8 @@ impl Session {
     async fn notify_stream_error(&self, sub_id: &str, message: impl Into<String>) {
         let event = Event {
             id: sub_id.to_string(),
+            conversation_id: Some(self.session_id),
+            task_id: None,
             msg: EventMsg::StreamError(StreamErrorEvent {
                 message: message.into(),
             }),
@@ -1022,6 +1051,8 @@ impl AgentTask {
             self.handle.abort();
             let event = Event {
                 id: self.sub_id,
+                conversation_id: Some(self.sess.session_id),
+                task_id: None,
                 msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
             };
             let tx_event = self.sess.tx_event.clone();
@@ -1106,6 +1137,7 @@ async fn submission_loop(
                     include_web_search_request: config.tools_web_search_request,
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                     include_view_image_tool: config.include_view_image_tool,
+                    include_conv_tools: true,
                 });
 
                 let new_turn_context = TurnContext {
@@ -1192,6 +1224,7 @@ async fn submission_loop(
                             use_streamable_shell_tool: config
                                 .use_experimental_streamable_shell_tool,
                             include_view_image_tool: config.include_view_image_tool,
+                            include_conv_tools: true,
                         }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
@@ -1234,6 +1267,7 @@ async fn submission_loop(
             Op::GetHistoryEntryRequest { offset, log_id } => {
                 let config = config.clone();
                 let tx_event = sess.tx_event.clone();
+                let session_id = sess.session_id;
                 let sub_id = sub.id.clone();
 
                 tokio::spawn(async move {
@@ -1246,6 +1280,8 @@ async fn submission_loop(
 
                     let event = Event {
                         id: sub_id,
+                        conversation_id: Some(session_id),
+                        task_id: None,
                         msg: EventMsg::GetHistoryEntryResponse(
                             crate::protocol::GetHistoryEntryResponseEvent {
                                 offset,
@@ -1274,6 +1310,8 @@ async fn submission_loop(
                 let tools = sess.mcp_connection_manager.list_all_tools();
                 let event = Event {
                     id: sub_id,
+                    conversation_id: Some(sess.session_id),
+                    task_id: None,
                     msg: EventMsg::McpListToolsResponse(
                         crate::protocol::McpListToolsResponseEvent { tools },
                     ),
@@ -1295,6 +1333,8 @@ async fn submission_loop(
 
                 let event = Event {
                     id: sub_id,
+                    conversation_id: Some(sess.session_id),
+                    task_id: None,
                     msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
                         custom_prompts,
                     }),
@@ -1333,6 +1373,8 @@ async fn submission_loop(
                     warn!("failed to shutdown rollout recorder: {e}");
                     let event = Event {
                         id: sub.id.clone(),
+                        conversation_id: Some(sess.session_id),
+                        task_id: None,
                         msg: EventMsg::Error(ErrorEvent {
                             message: "Failed to shutdown rollout recorder".to_string(),
                         }),
@@ -1344,6 +1386,8 @@ async fn submission_loop(
 
                 let event = Event {
                     id: sub.id.clone(),
+                    conversation_id: Some(sess.session_id),
+                    task_id: None,
                     msg: EventMsg::ShutdownComplete,
                 };
                 if let Err(e) = sess.tx_event.send(event).await {
@@ -1357,6 +1401,8 @@ async fn submission_loop(
 
                 let event = Event {
                     id: sub_id.clone(),
+                    conversation_id: Some(sess.session_id),
+                    task_id: None,
                     msg: EventMsg::ConversationHistory(ConversationHistoryResponseEvent {
                         conversation_id: sess.session_id,
                         entries: sess.state.lock_unchecked().history.contents(),
@@ -1398,6 +1444,8 @@ async fn run_task(
     }
     let event = Event {
         id: sub_id.clone(),
+        conversation_id: Some(sess.session_id),
+        task_id: None,
         msg: EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window: turn_context.client.get_model_context_window(),
         }),
@@ -1572,6 +1620,8 @@ async fn run_task(
                 info!("Turn error: {e:#}");
                 let event = Event {
                     id: sub_id.clone(),
+                    conversation_id: Some(sess.session_id),
+                    task_id: None,
                     msg: EventMsg::Error(ErrorEvent {
                         message: e.to_string(),
                     }),
@@ -1585,6 +1635,8 @@ async fn run_task(
     sess.remove_task(&sub_id);
     let event = Event {
         id: sub_id,
+        conversation_id: Some(sess.session_id),
+        task_id: None,
         msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),
     };
     sess.tx_event.send(event).await.ok();
@@ -1768,6 +1820,8 @@ async fn try_run_turn(
                     .tx_event
                     .send(Event {
                         id: sub_id.to_string(),
+                        conversation_id: Some(sess.session_id),
+                        task_id: None,
                         msg: EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id }),
                     })
                     .await;
@@ -1780,6 +1834,8 @@ async fn try_run_turn(
                     sess.tx_event
                         .send(Event {
                             id: sub_id.to_string(),
+                            conversation_id: Some(sess.session_id),
+                            task_id: None,
                             msg: EventMsg::TokenCount(token_usage),
                         })
                         .await
@@ -1791,6 +1847,8 @@ async fn try_run_turn(
                     let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
                     let event = Event {
                         id: sub_id.to_string(),
+                        conversation_id: Some(sess.session_id),
+                        task_id: None,
                         msg,
                     };
                     let _ = sess.tx_event.send(event).await;
@@ -1799,30 +1857,38 @@ async fn try_run_turn(
                 return Ok(output);
             }
             ResponseEvent::OutputTextDelta(delta) => {
-                let event = Event {
-                    id: sub_id.to_string(),
-                    msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
-                };
+            let event = Event {
+                id: sub_id.to_string(),
+                conversation_id: Some(sess.session_id),
+                task_id: None,
+                msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+            };
                 sess.tx_event.send(event).await.ok();
             }
             ResponseEvent::ReasoningSummaryDelta(delta) => {
-                let event = Event {
-                    id: sub_id.to_string(),
-                    msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }),
-                };
+            let event = Event {
+                id: sub_id.to_string(),
+                conversation_id: Some(sess.session_id),
+                task_id: None,
+                msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }),
+            };
                 sess.tx_event.send(event).await.ok();
             }
             ResponseEvent::ReasoningSummaryPartAdded => {
-                let event = Event {
-                    id: sub_id.to_string(),
-                    msg: EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {}),
-                };
+            let event = Event {
+                id: sub_id.to_string(),
+                conversation_id: Some(sess.session_id),
+                task_id: None,
+                msg: EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {}),
+            };
                 sess.tx_event.send(event).await.ok();
             }
             ResponseEvent::ReasoningContentDelta(delta) => {
                 if sess.show_raw_agent_reasoning {
                     let event = Event {
                         id: sub_id.to_string(),
+                        conversation_id: Some(sess.session_id),
+                        task_id: None,
                         msg: EventMsg::AgentReasoningRawContentDelta(
                             AgentReasoningRawContentDeltaEvent { delta },
                         ),
@@ -1844,6 +1910,8 @@ async fn run_compact_task(
     let model_context_window = turn_context.client.get_model_context_window();
     let start_event = Event {
         id: sub_id.clone(),
+        conversation_id: Some(sess.session_id),
+        task_id: None,
         msg: EventMsg::TaskStarted(TaskStartedEvent {
             model_context_window,
         }),
@@ -1888,6 +1956,8 @@ async fn run_compact_task(
                 } else {
                     let event = Event {
                         id: sub_id.clone(),
+                        conversation_id: Some(sess.session_id),
+                        task_id: None,
                         msg: EventMsg::Error(ErrorEvent {
                             message: e.to_string(),
                         }),
@@ -1908,6 +1978,8 @@ async fn run_compact_task(
 
     let event = Event {
         id: sub_id.clone(),
+        conversation_id: Some(sess.session_id),
+        task_id: None,
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Compact task completed".to_string(),
         }),
@@ -1915,6 +1987,8 @@ async fn run_compact_task(
     sess.send_event(event).await;
     let event = Event {
         id: sub_id.clone(),
+        conversation_id: Some(sess.session_id),
+        task_id: None,
         msg: EventMsg::TaskComplete(TaskCompleteEvent {
             last_agent_message: None,
         }),
@@ -2027,6 +2101,8 @@ async fn handle_response_item(
             for msg in msgs {
                 let event = Event {
                     id: sub_id.to_string(),
+                    conversation_id: Some(sess.session_id),
+                    task_id: None,
                     msg,
                 };
                 sess.tx_event.send(event).await.ok();
@@ -2322,7 +2398,16 @@ async fn handle_container_exec_with_params(
     // check if this was a patch, and apply it if so
     let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
         MaybeApplyPatchVerified::Body(changes) => {
-            match apply_patch::apply_patch(sess, turn_context, &sub_id, &call_id, changes).await {
+            match apply_patch::apply_patch(
+                sess,
+                turn_context,
+                &sub_id,
+                &call_id,
+                changes,
+                sess.session_id,
+            )
+            .await
+            {
                 InternalApplyPatchInvocation::Output(item) => return item,
                 InternalApplyPatchInvocation::DelegateToExec(apply_patch_exec) => {
                     Some(apply_patch_exec)
@@ -2488,6 +2573,8 @@ async fn handle_container_exec_with_params(
                         sub_id: sub_id.clone(),
                         call_id: call_id.clone(),
                         tx_event: sess.tx_event.clone(),
+                        conversation_id: Some(sess.session_id),
+                        task_id: None,
                     })
                 },
             },
@@ -2625,6 +2712,8 @@ async fn handle_sandbox_error(
                                 sub_id: sub_id.clone(),
                                 call_id: call_id.clone(),
                                 tx_event: sess.tx_event.clone(),
+                                conversation_id: Some(sess.session_id),
+                                task_id: None,
                             })
                         },
                     },
@@ -2857,6 +2946,8 @@ async fn drain_to_completed(
                 sess.tx_event
                     .send(Event {
                         id: sub_id.to_string(),
+                        conversation_id: Some(sess.session_id),
+                        task_id: None,
                         msg: EventMsg::TokenCount(token_usage),
                     })
                     .await
