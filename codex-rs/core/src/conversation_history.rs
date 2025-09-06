@@ -158,7 +158,7 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Reasoning { .. } => true,
-        ResponseItem::Other => false,
+        ResponseItem::WebSearchCall { .. } | ResponseItem::Other => false,
     }
 }
 
@@ -248,49 +248,6 @@ mod tests {
                 text: text.to_string(),
             }],
         }
-    }
-
-    #[test]
-    fn merges_adjacent_assistant_messages() {
-        let mut h = ConversationHistory::default();
-        let a1 = assistant_msg("Hello");
-        let a2 = assistant_msg(", world!");
-        h.record_items([&a1, &a2]);
-
-        let items = h.contents();
-        assert_eq!(
-            items,
-            vec![ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "Hello, world!".to_string()
-                }]
-            }]
-        );
-    }
-
-    #[test]
-    fn append_assistant_text_creates_and_appends() {
-        let mut h = ConversationHistory::default();
-        h.append_assistant_text("Hello");
-        h.append_assistant_text(", world");
-
-        // Now record a final full assistant message and verify it merges.
-        let final_msg = assistant_msg("!");
-        h.record_items([&final_msg]);
-
-        let items = h.contents();
-        assert_eq!(
-            items,
-            vec![ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "Hello, world!".to_string()
-                }]
-            }]
-        );
     }
 
     #[test]

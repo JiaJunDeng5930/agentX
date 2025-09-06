@@ -20,6 +20,7 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_login::AuthManager;
+use crate::event_mapping::map_response_item_to_event_messages;
 use codex_protocol::protocol::ConversationHistoryResponseEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
@@ -103,6 +104,7 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
+use crate::protocol::TokenUsageInfo;
 use crate::protocol::TokenUsage;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
@@ -264,6 +266,7 @@ struct State {
     approved_commands: HashSet<CommandKey>,
     current_task: Option<AgentTask>,
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    token_info: Option<crate::protocol::TokenUsageInfo>,
 }
 
 #[derive(Debug)]
@@ -279,6 +282,7 @@ struct ToolsPrefs {
     include_apply_patch_tool: bool,
     web_search_request: bool,
     use_streamable_shell_tool: bool,
+    include_view_image_tool: bool,
 }
 #[derive(Debug, Clone)]
 struct ConversationContext {
@@ -2420,23 +2424,22 @@ async fn run_turn(
     // Assemble tool configuration from conversation preferences and current policies/model.
     let model_family = turn_context.client.get_model_family();
     let prefs = &conv.ctx.tools_prefs;
-    let tools_config = ToolsConfig::new(
-        &model_family,
-        turn_context.approval_policy,
-        turn_context.sandbox_policy.clone(),
-        prefs.include_plan_tool,
-        prefs.include_apply_patch_tool,
-        prefs.web_search_request,
-        prefs.use_streamable_shell_tool,
-        // include conv tools only for Responses API
-        turn_context.client.get_provider().wire_api
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_family: &model_family,
+        approval_policy: turn_context.approval_policy,
+        sandbox_policy: turn_context.sandbox_policy.clone(),
+        include_plan_tool: prefs.include_plan_tool,
+        include_apply_patch_tool: prefs.include_apply_patch_tool,
+        include_web_search_request: prefs.web_search_request,
+        use_streamable_shell_tool: prefs.use_streamable_shell_tool,
+        include_view_image_tool: prefs.include_view_image_tool,
+        include_conv_tools: turn_context.client.get_provider().wire_api
             == crate::model_provider_info::WireApi::Responses,
-    );
+    });
     let tools = get_openai_tools(&tools_config, Some(conv.ctx.mcp_view.list_tools()));
 
     let prompt = Prompt {
         input,
-        store: turn_context.storage_policy.upstream_store_enabled(),
         tools,
         base_instructions_override: conv.ctx.base_instructions.clone(),
     };
@@ -2619,7 +2622,7 @@ async fn try_run_turn(
                         id: sub_id.to_string(),
                         conversation_id: Some(conv.id),
                         task_id: sess.current_task_id(),
-                        msg: EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id, query: q }),
+                        msg: EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id }),
                     })
                     .await;
             }
@@ -2627,27 +2630,33 @@ async fn try_run_turn(
                 response_id: _,
                 token_usage,
             } => {
-                if let Some(token_usage) = token_usage {
-                    // Update baseline used tokens if not set yet (prefer first turn cached tokens).
-                    {
-                        let mut st = conv.state.lock_unchecked();
-                        if st.baseline_used_tokens.is_none()
-                            && let Some(cached) = token_usage.cached_input_tokens
-                        {
-                            st.baseline_used_tokens = Some(cached);
-                        }
-                    }
+                // Build cumulative token usage info and emit TokenCount event
+                let info = {
+                    let mut st = sess.state.lock_unchecked();
+                    let info = crate::protocol::TokenUsageInfo::new_or_append(
+                        &st.token_info,
+                        &token_usage,
+                        turn_context.client.get_model_context_window(),
+                    );
+                    st.token_info = info.clone();
+                    info
+                };
+                sess.tx_event
+                    .send(Event {
+                        id: sub_id.to_string(),
+                        conversation_id: Some(conv.id),
+                        task_id: sess.current_task_id(),
+                        msg: EventMsg::TokenCount(crate::protocol::TokenCountEvent { info }),
+                    })
+                    .await
+                    .ok();
 
-                    // Forward token usage to clients.
-                    sess.tx_event
-                        .send(Event {
-                            id: sub_id.to_string(),
-                            conversation_id: Some(conv.id),
-                            task_id: sess.current_task_id(),
-                            msg: EventMsg::TokenCount(token_usage.clone()),
-                        })
-                        .await
-                        .ok();
+                if let Some(token_usage) = token_usage.clone() {
+                    // Update baseline used tokens if not set yet (prefer first turn cached tokens).
+                    let mut st = conv.state.lock_unchecked();
+                    if st.baseline_used_tokens.is_none() {
+                        st.baseline_used_tokens = Some(token_usage.cached_input_tokens);
+                    }
                     last_token_usage = Some(token_usage);
                 }
 
@@ -2740,7 +2749,6 @@ async fn run_compact_task(
 
     let prompt = Prompt {
         input: turn_input,
-        store: turn_context.storage_policy.upstream_store_enabled(),
         tools: Vec::new(),
         base_instructions_override: Some(compact_instructions.clone()),
     };
@@ -4392,7 +4400,6 @@ async fn inline_compact(
     let turn_input: Vec<ResponseItem> = sess.turn_input_with_history_for(conv, vec![]);
     let prompt = Prompt {
         input: turn_input,
-        store: turn_context.storage_policy.upstream_store_enabled(),
         tools: Vec::new(),
         base_instructions_override: Some(SUMMARIZATION_PROMPT.to_string()),
     };

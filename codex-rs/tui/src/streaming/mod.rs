@@ -64,22 +64,27 @@ impl HeaderEmitter {
         self.emitted_this_turn = false;
     }
 
-    pub(crate) fn maybe_emit(&mut self, out_lines: &mut Vec<ratatui::text::Line<'static>>) -> bool {
+    pub(crate) fn maybe_emit_header(&mut self) -> bool {
         if !self.emitted_in_stream && !self.emitted_this_turn {
+<<<<<<< HEAD
             // Add a leading blank line before the header for visual spacing
             out_lines.push(ratatui::text::Line::from(""));
             out_lines.push(render_header_line(self.conv_short.as_ref()));
+=======
+>>>>>>> upstream/main
             self.emitted_in_stream = true;
             self.emitted_this_turn = true;
-            return true;
+            true
+        } else {
+            false
         }
-        false
     }
 
     pub(crate) fn set_conv_short(&mut self, short: Option<String>) {
         self.conv_short = short;
     }
 }
+<<<<<<< HEAD
 
 fn render_header_line(conv_short: Option<&String>) -> ratatui::text::Line<'static> {
     use ratatui::style::Stylize;
@@ -91,3 +96,5 @@ fn render_header_line(conv_short: Option<&String>) -> ratatui::text::Line<'stati
         _ => ratatui::text::Line::from("agentx".magenta().bold()),
     }
 }
+=======
+>>>>>>> upstream/main

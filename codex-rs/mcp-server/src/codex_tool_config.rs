@@ -162,7 +162,7 @@ impl CodexToolCallParam {
             user_instructions: None,
             include_plan_tool,
             include_apply_patch_tool: None,
-            disable_response_storage: None,
+            include_view_image_tool: None,
             show_raw_agent_reasoning: None,
             tools_web_search_request: None,
             mcp_tool_allowlist: None,
