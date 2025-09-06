@@ -366,10 +366,8 @@ impl ModelClient {
         self.auth_manager.clone()
     }
 
-    /// Returns the configured model context window, if known.
-    pub fn get_model_context_window(&self) -> Option<u64> {
-        self.config.model_context_window
-    }
+    // NOTE: Preferred accessor is the earlier version that can fall back to
+    // openai_model_info when config does not specify model_context_window.
 
     pub fn get_auto_compact_enabled(&self) -> bool {
         self.config.auto_compact_enabled

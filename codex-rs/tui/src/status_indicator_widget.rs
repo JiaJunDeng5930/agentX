@@ -173,62 +173,6 @@ impl WidgetRef for StatusIndicatorWidget {
             " to interrupt)".dim(),
         ]);
 
-<<<<<<< HEAD
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.push(Span::styled("▌ ", Style::default().fg(Color::Cyan)));
-
-        // Animated header after the left bar
-        spans.extend(animated_spans);
-        // Space between header and bracket block
-        spans.push(Span::raw(" "));
-        // Non-animated, dim bracket content, with keys bold
-        let bracket_prefix = format!("({elapsed}s • ");
-        spans.push(Span::styled(
-            bracket_prefix,
-            Style::default().add_modifier(Modifier::DIM),
-        ));
-        spans.push(Span::styled(
-            "Esc",
-            Style::default().add_modifier(Modifier::DIM | Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            " to interrupt)",
-            Style::default().add_modifier(Modifier::DIM),
-        ));
-        // Optional: show current conversation id (short) after the bracket block
-        if let Some(short) = &self.conv_short {
-            spans.push(Span::styled(
-                " ",
-                Style::default().add_modifier(Modifier::DIM),
-            ));
-            spans.push(Span::styled(
-                format!("conv {short}"),
-                Style::default().add_modifier(Modifier::DIM),
-            ));
-        }
-        // Add a space and then the log text (not animated by the gradient)
-        if !status_prefix.is_empty() {
-            spans.push(Span::styled(
-                " ",
-                Style::default().add_modifier(Modifier::DIM),
-            ));
-            spans.push(Span::styled(
-                status_prefix,
-                Style::default().add_modifier(Modifier::DIM),
-            ));
-        }
-
-        // Truncate spans to fit the width.
-        let mut acc: Vec<Span<'static>> = Vec::new();
-        let mut used = 0usize;
-        for s in spans {
-            let w = s.content.width();
-            if used + w <= inner_width {
-                acc.push(s);
-                used += w;
-            } else {
-                break;
-=======
         // Build lines: status, then queued messages, then spacer.
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(spans));
@@ -243,7 +187,6 @@ impl WidgetRef for StatusIndicatorWidget {
             }
             if wrapped.len() > 3 {
                 lines.push(Line::from("   …".dim().italic()));
->>>>>>> upstream/main
             }
         }
         if !self.queued_messages.is_empty() {

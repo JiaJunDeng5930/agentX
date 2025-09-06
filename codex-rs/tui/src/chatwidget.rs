@@ -125,17 +125,13 @@ pub(crate) struct ChatWidget {
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
-<<<<<<< HEAD
-    last_history_was_exec: bool,
-    // Currently active conversation id for the running task (if any)
-    active_conv_id: Option<Uuid>,
-=======
     // When resuming an existing session (selected via resume picker), avoid an
     // immediate redraw on SessionConfigured to prevent a gratuitous UI flicker.
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
->>>>>>> upstream/main
+    // Currently active conversation id for the running task (if any)
+    active_conv_id: Option<Uuid>,
 }
 
 struct UserMessage {
@@ -667,14 +663,10 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             session_id: None,
-<<<<<<< HEAD
-            active_conv_id: None,
-            last_history_was_exec: false,
-=======
             queued_user_messages: VecDeque::new(),
->>>>>>> upstream/main
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
+            active_conv_id: None,
         }
     }
 
@@ -724,14 +716,10 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             session_id: None,
-<<<<<<< HEAD
-            active_conv_id: None,
-            last_history_was_exec: false,
-=======
             queued_user_messages: VecDeque::new(),
->>>>>>> upstream/main
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
+            active_conv_id: None,
         }
     }
 
@@ -1038,12 +1026,6 @@ impl ChatWidget {
         }
     }
 
-<<<<<<< HEAD
-    pub(crate) fn handle_codex_event(&mut self, event: Event) {
-        // Reset redraw flag for this dispatch
-        self.needs_redraw = false;
-        let Event { id, msg, .. } = event;
-=======
     /// Replay a subset of initial events into the UI to seed the transcript when
     /// resuming an existing session. This approximates the live event flow and
     /// is intentionally conservative: only safe-to-replay items are rendered to
@@ -1058,10 +1040,9 @@ impl ChatWidget {
             self.dispatch_event_msg(None, msg, true);
         }
     }
->>>>>>> upstream/main
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
-        let Event { id, msg } = event;
+        let Event { id, msg, .. } = event;
         self.dispatch_event_msg(Some(id), msg, false);
     }
 
@@ -1095,32 +1076,9 @@ impl ChatWidget {
                 self.on_agent_reasoning_final()
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-<<<<<<< HEAD
-            EventMsg::TaskStarted => {
-                // Start status view, then show conv id so the widget is present.
-                self.on_task_started();
-                self.active_conv_id = event.conversation_id;
-                self.bottom_pane.set_active_conv_id(self.active_conv_id);
-                // Also update stream header with current conversation short id.
-                let short = self.active_conv_id.map(|u| {
-                    let s = u.as_simple().to_string();
-                    let n = s.len().min(8);
-                    s[..n].to_string()
-                });
-                self.stream.set_conv_short_id(short);
-            }
-            EventMsg::TaskComplete(TaskCompleteEvent { .. }) => {
-                self.on_task_complete();
-                self.active_conv_id = None;
-                self.bottom_pane.set_active_conv_id(None);
-                self.stream.set_conv_short_id(None);
-            }
-            EventMsg::TokenCount(token_usage) => self.on_token_count(token_usage),
-=======
             EventMsg::TaskStarted(_) => self.on_task_started(),
             EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
             EventMsg::TokenCount(ev) => self.set_token_info(ev.info),
->>>>>>> upstream/main
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
@@ -1183,7 +1141,10 @@ impl ChatWidget {
             Some(InputMessageKind::Plain) | None => {
                 let message = event.message.trim();
                 if !message.is_empty() {
-                    self.add_to_history(history_cell::new_user_prompt(message.to_string()));
+                    self.add_to_history(history_cell::new_user_prompt(
+                        message.to_string(),
+                        None,
+                    ));
                 }
             }
         }

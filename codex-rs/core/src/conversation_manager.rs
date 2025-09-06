@@ -20,11 +20,8 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use codex_protocol::models::ResponseItem;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum InitialHistory {
-    New,
-    Resumed(Vec<ResponseItem>),
-}
+// Initial history for a new conversation: None => start fresh; Some(vec) => resume with items.
+pub type InitialHistory = Option<Vec<ResponseItem>>;
 
 /// Represents a newly created Codex conversation, including the first event
 /// (which is [`EventMsg::SessionConfigured`]).
@@ -77,7 +74,7 @@ impl ConversationManager {
             let CodexSpawnOk {
                 codex,
                 session_id: conversation_id,
-            } = { Codex::spawn(config, auth_manager, InitialHistory::New).await? };
+            } = { Codex::spawn(config, auth_manager, None).await? };
             self.finalize_spawn(codex, conversation_id).await
         }
     }
@@ -173,7 +170,7 @@ impl ConversationManager {
 /// and all items that follow them.
 fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> InitialHistory {
     if n == 0 {
-        return InitialHistory::Resumed(items);
+        return Some(items);
     }
 
     // Walk backwards counting only `user` Message items, find cut index.
@@ -191,12 +188,7 @@ fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> 
             }
         }
     }
-    if cut_index == 0 {
-        // No prefix remains after dropping; start a new conversation.
-        InitialHistory::New
-    } else {
-        InitialHistory::Resumed(items.into_iter().take(cut_index).collect())
-    }
+    if cut_index == 0 { None } else { Some(items.into_iter().take(cut_index).collect()) }
 }
 
 #[cfg(test)]

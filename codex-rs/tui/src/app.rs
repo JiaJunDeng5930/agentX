@@ -171,7 +171,7 @@ impl App {
                     format_label,
                 } => {
                     self.chat_widget
-                        .attach_image(path, width, height, format_label);
+                        .attach_image(path, width, height, &format_label);
                     tui.frame_requester().schedule_frame();
                 }
                 TuiEvent::Draw => {

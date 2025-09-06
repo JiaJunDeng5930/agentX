@@ -66,12 +66,7 @@ impl HeaderEmitter {
 
     pub(crate) fn maybe_emit_header(&mut self) -> bool {
         if !self.emitted_in_stream && !self.emitted_this_turn {
-<<<<<<< HEAD
-            // Add a leading blank line before the header for visual spacing
-            out_lines.push(ratatui::text::Line::from(""));
-            out_lines.push(render_header_line(self.conv_short.as_ref()));
-=======
->>>>>>> upstream/main
+            // Header will be injected by the controller into out_lines as needed.
             self.emitted_in_stream = true;
             self.emitted_this_turn = true;
             true
@@ -84,17 +79,4 @@ impl HeaderEmitter {
         self.conv_short = short;
     }
 }
-<<<<<<< HEAD
-
-fn render_header_line(conv_short: Option<&String>) -> ratatui::text::Line<'static> {
-    use ratatui::style::Stylize;
-    match conv_short {
-        Some(s) if !s.is_empty() => ratatui::text::Line::from(vec![
-            format!("[conv {s}] ").dim(),
-            "agentx".magenta().bold(),
-        ]),
-        _ => ratatui::text::Line::from("agentx".magenta().bold()),
-    }
-}
-=======
->>>>>>> upstream/main
+// Header rendering is handled in the controller; no local helper here.

@@ -175,7 +175,7 @@ fn estimate_tokens(item: &ResponseItem) -> usize {
         ResponseItem::CustomToolCallOutput { output, .. } => estimate_text_tokens(output),
         ResponseItem::LocalShellCall { .. } => 8,
         ResponseItem::Reasoning { .. } => 0,
-        ResponseItem::Other => 0,
+        ResponseItem::Other | ResponseItem::WebSearchCall { .. } => 0,
     }
 }
 

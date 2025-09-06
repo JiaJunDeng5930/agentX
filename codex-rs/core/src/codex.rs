@@ -19,7 +19,8 @@ use chrono;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
-use codex_login::AuthManager;
+use crate::auth::AuthManager;
+use crate::openai_tools::ToolsConfigParams;
 use crate::event_mapping::map_response_item_to_event_messages;
 use codex_protocol::protocol::ConversationHistoryResponseEvent;
 use codex_protocol::protocol::TurnAbortReason;
@@ -62,7 +63,7 @@ use crate::exec::StreamOutput;
 use crate::exec::process_exec_tool_call;
 use crate::exec_command::EXEC_COMMAND_TOOL_NAME;
 use crate::exec_command::ExecCommandParams;
-use crate::exec_command::SESSION_MANAGER;
+use crate::exec_command::ExecSessionManager;
 use crate::exec_command::WRITE_STDIN_TOOL_NAME;
 use crate::exec_command::WriteStdinParams;
 use crate::exec_env::create_env;
@@ -101,6 +102,7 @@ use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
+use crate::protocol::TaskStartedEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
@@ -108,6 +110,7 @@ use crate::protocol::TokenUsageInfo;
 use crate::protocol::TokenUsage;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
+use crate::protocol::WebSearchEndEvent;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_safety_for_untrusted_command;
@@ -121,6 +124,7 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
+use codex_protocol::models::WebSearchAction;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseInputItem;
@@ -192,7 +196,7 @@ impl Codex {
             base_instructions: config.base_instructions.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
-            disable_response_storage: config.disable_response_storage,
+            disable_response_storage: false,
             notify: config.notify.clone(),
             cwd: config.cwd.clone(),
             resume_path,
@@ -356,6 +360,8 @@ pub(crate) struct Session {
 
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
+    /// Exec-command session manager (PTY-backed interactive shell sessions)
+    session_manager: ExecSessionManager,
 
     /// External notifier command (will be passed as args to exec()). When
     /// `None` this feature is disabled.
@@ -488,9 +494,13 @@ impl Session {
         // - load history metadata
         let rollout_fut = async {
             match resume_path.as_ref() {
-                Some(path) => RolloutRecorder::resume(path, cwd.clone())
-                    .await
-                    .map(|(rec, saved)| (saved.session_id, Some(saved), rec)),
+                Some(path) => {
+                    let session_id = Uuid::new_v4();
+                    let items = RolloutRecorder::get_rollout_history(path).await.ok().flatten();
+                    RolloutRecorder::new(&config, session_id, user_instructions.clone())
+                        .await
+                        .map(|rec| (session_id, items, rec))
+                }
                 None => {
                     let session_id = Uuid::new_v4();
                     RolloutRecorder::new(&config, session_id, user_instructions.clone())
@@ -515,16 +525,8 @@ impl Session {
             restored_items: Option<Vec<ResponseItem>>,
         }
         let rollout_result = match rollout_res {
-            Ok((session_id, maybe_saved, recorder)) => {
-                let restored_items: Option<Vec<ResponseItem>> = initial_history.or_else(|| {
-                    maybe_saved.and_then(|saved_session| {
-                        if saved_session.items.is_empty() {
-                            None
-                        } else {
-                            Some(saved_session.items)
-                        }
-                    })
-                });
+            Ok((session_id, resumed_items, recorder)) => {
+                let restored_items: Option<Vec<ResponseItem>> = initial_history.or(resumed_items);
                 RolloutResult {
                     session_id,
                     rollout_recorder: Some(recorder),
@@ -655,6 +657,7 @@ impl Session {
                     include_apply_patch_tool: config.include_apply_patch_tool,
                     web_search_request: config.tools_web_search_request,
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+                    include_view_image_tool: config.include_view_image_tool,
                 },
             },
             last_active_at: Mutex::new(std::time::SystemTime::now()),
@@ -671,6 +674,7 @@ impl Session {
             tx_event: tx_event.clone(),
             session_started: Instant::now(),
             mcp_connection_manager,
+            session_manager: ExecSessionManager::default(),
             notify,
             state: Mutex::new(state),
             rollout: Mutex::new(rollout_recorder),
@@ -691,7 +695,12 @@ impl Session {
         // regardless of whether we restored items.
         let mut conversation_items = Vec::<ResponseItem>::with_capacity(2);
         if let Some(user_instructions) = root_conversation.ctx.user_instructions.as_deref() {
-            conversation_items.push(Prompt::format_user_instructions_message(user_instructions));
+            conversation_items.push(
+                crate::user_instructions::UserInstructions::new(
+                    user_instructions.to_string(),
+                )
+                .into(),
+            );
         }
         conversation_items.push(ResponseItem::from(EnvironmentContext::new(
             Some(turn_context.cwd.clone()),
@@ -712,6 +721,7 @@ impl Session {
                 model,
                 history_log_id,
                 history_entry_count,
+                initial_messages: None,
             }),
         })
         .chain(post_session_configured_error_events.into_iter());
@@ -2173,7 +2183,9 @@ async fn run_task(
         id: sub_id.clone(),
         conversation_id: Some(conv.id),
         task_id: Some(task_id),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: turn_context.client.get_model_context_window(),
+        }),
     };
     if sess.tx_event.send(event).await.is_err() {
         return;
@@ -2614,8 +2626,7 @@ async fn try_run_turn(
                 .await?;
                 output.push(ProcessedResponseItem { item, response });
             }
-            ResponseEvent::WebSearchCallBegin { call_id, query } => {
-                let q = query.unwrap_or_else(|| "Searching Web...".to_string());
+            ResponseEvent::WebSearchCallBegin { call_id } => {
                 let _ = sess
                     .tx_event
                     .send(Event {
@@ -2735,7 +2746,9 @@ async fn run_compact_task(
         id: sub_id.clone(),
         conversation_id: Some(sess.root_conversation_id()),
         task_id: Some(task_id),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: turn_context.client.get_model_context_window(),
+        }),
     };
     if sess.tx_event.send(start_event).await.is_err() {
         return;
@@ -2970,6 +2983,23 @@ async fn handle_response_item(
         }
         ResponseItem::CustomToolCallOutput { .. } => {
             debug!("unexpected CustomToolCallOutput from stream");
+            None
+        }
+        ResponseItem::WebSearchCall { id, action, .. } => {
+            let call_id = id.unwrap_or_default();
+            let query = match action {
+                WebSearchAction::Search { query } => query,
+                _ => String::new(),
+            };
+            let _ = sess
+                .tx_event
+                .send(Event {
+                    id: sub_id.to_string(),
+                    conversation_id: Some(conv.id),
+                    task_id: sess.current_task_id(),
+                    msg: EventMsg::WebSearchEnd(WebSearchEndEvent { call_id, query }),
+                })
+                .await;
             None
         }
         ResponseItem::Other => None,
@@ -3507,7 +3537,7 @@ async fn handle_function_call(
                     };
                 }
             };
-            let result = SESSION_MANAGER
+            let result = sess.session_manager
                 .handle_exec_command_request(exec_params)
                 .await;
             let function_call_output = crate::exec_command::result_into_payload(result);
@@ -3529,7 +3559,7 @@ async fn handle_function_call(
                     };
                 }
             };
-            let result = SESSION_MANAGER
+            let result = sess.session_manager
                 .handle_write_stdin_request(write_stdin_params)
                 .await;
             let function_call_output: FunctionCallOutputPayload =
@@ -4250,12 +4280,22 @@ async fn drain_to_completed(
                         ));
                     }
                 };
+                let info = {
+                    let mut st = sess.state.lock_unchecked();
+                    let info = crate::protocol::TokenUsageInfo::new_or_append(
+                        &st.token_info,
+                        &Some(token_usage),
+                        turn_context.client.get_model_context_window(),
+                    );
+                    st.token_info = info.clone();
+                    info
+                };
                 sess.tx_event
                     .send(Event {
                         id: sub_id.to_string(),
                         conversation_id: Some(sess.root_conversation_id()),
                         task_id: None,
-                        msg: EventMsg::TokenCount(token_usage),
+                        msg: EventMsg::TokenCount(crate::protocol::TokenCountEvent { info }),
                     })
                     .await
                     .ok();
@@ -4297,12 +4337,22 @@ async fn drain_to_completed_for_conv(
                 token_usage,
             }) => {
                 if let Some(token_usage) = token_usage {
+                    let info = {
+                        let mut st = sess.state.lock_unchecked();
+                        let info = crate::protocol::TokenUsageInfo::new_or_append(
+                            &st.token_info,
+                            &Some(token_usage),
+                            turn_context.client.get_model_context_window(),
+                        );
+                        st.token_info = info.clone();
+                        info
+                    };
                     sess.tx_event
                         .send(Event {
                             id: sub_id.to_string(),
                             conversation_id: Some(conv.id),
                             task_id: sess.current_task_id(),
-                            msg: EventMsg::TokenCount(token_usage),
+                            msg: EventMsg::TokenCount(crate::protocol::TokenCountEvent { info }),
                         })
                         .await
                         .ok();
@@ -4332,24 +4382,21 @@ async fn ensure_auto_compact_pre_turn(
 
     let threshold = turn_context.client.get_auto_compact_threshold_percent();
     // Estimate used tokens from conversation history (approx) and compute remaining %.
-    let (used_estimate, baseline) = {
+    let used_estimate = {
         let st = conv.state.lock_unchecked();
-        (
-            st.history.approx_total_tokens() as u64,
-            st.baseline_used_tokens.unwrap_or(0),
-        )
+        st.history.approx_total_tokens() as u64
     };
     if context_window == 0 {
         return Ok(());
     }
     let usage = TokenUsage {
         input_tokens: used_estimate,
-        cached_input_tokens: None,
+        cached_input_tokens: 0,
         output_tokens: 0,
-        reasoning_output_tokens: None,
+        reasoning_output_tokens: 0,
         total_tokens: used_estimate,
     };
-    let remaining = usage.percent_of_context_window_remaining(context_window, baseline);
+    let remaining = usage.percent_of_context_window_remaining(context_window);
     if remaining <= threshold {
         // Notify lightly and inline-compact.
         sess.notify_background_event_for(sub_id, conv.id, "自动 compact 已触发")
@@ -4376,11 +4423,7 @@ async fn ensure_auto_compact_post_turn(
     let Some(usage) = last_usage.cloned() else {
         return Ok(());
     };
-    let baseline = {
-        let st = conv.state.lock_unchecked();
-        st.baseline_used_tokens.unwrap_or(0)
-    };
-    let remaining = usage.percent_of_context_window_remaining(context_window, baseline);
+    let remaining = usage.percent_of_context_window_remaining(context_window);
     if remaining <= turn_context.client.get_auto_compact_threshold_percent() {
         sess.notify_background_event_for(sub_id, conv.id, "自动 compact 已触发")
             .await;
@@ -4744,7 +4787,7 @@ mod conv_tools_tests {
             base_instructions: cfg.base_instructions.clone(),
             approval_policy: cfg.approval_policy,
             sandbox_policy: cfg.sandbox_policy.clone(),
-            disable_response_storage: cfg.disable_response_storage,
+            disable_response_storage: false,
             notify: None,
             cwd: cfg.cwd.clone(),
             resume_path: None,
@@ -4752,6 +4795,7 @@ mod conv_tools_tests {
         let auth = Arc::new(AuthManager::new(
             cfg.codex_home.clone(),
             cfg.preferred_auth_method,
+            cfg.responses_originator_header.clone(),
         ));
         let (sess, tc) = Session::new(configure_session, cfg.clone(), auth, tx_event, None)
             .await
@@ -4895,6 +4939,7 @@ pub async fn invoke_conv_tool_for_cli(
     let auth = Arc::new(AuthManager::new(
         cfg.codex_home.clone(),
         cfg.preferred_auth_method,
+        cfg.responses_originator_header.clone(),
     ));
 
     let (sess, turn_context) = Session::new(
@@ -4907,7 +4952,7 @@ pub async fn invoke_conv_tool_for_cli(
             base_instructions: cfg.base_instructions.clone(),
             approval_policy: cfg.approval_policy,
             sandbox_policy: cfg.sandbox_policy.clone(),
-            disable_response_storage: cfg.disable_response_storage,
+            disable_response_storage: false,
             notify: cfg.notify.clone(),
             cwd: cfg.cwd.clone(),
             resume_path: None,

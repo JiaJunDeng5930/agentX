@@ -77,7 +77,12 @@ impl SlashCommand {
             | SlashCommand::Mention
             | SlashCommand::Status
             | SlashCommand::Mcp
-            | SlashCommand::Quit => true,
+            | SlashCommand::Quit
+            | SlashCommand::ConvList
+            | SlashCommand::ConvHistory
+            | SlashCommand::ConvCreate
+            | SlashCommand::ConvSend
+            | SlashCommand::ConvDestroy => true,
 
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => true,

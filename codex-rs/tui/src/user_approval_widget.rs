@@ -25,6 +25,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use ratatui::style::Stylize;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -114,22 +115,14 @@ pub(crate) struct UserApprovalWidget {
 impl UserApprovalWidget {
     pub(crate) fn new(approval_request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         let confirmation_prompt = match &approval_request {
-<<<<<<< HEAD
-            ApprovalRequest::Exec {
-                command, reason, ..
-            } => {
-                let cmd = strip_bash_lc_and_escape(command);
-                let mut contents: Vec<Line> = to_command_display(
-                    vec!["? ".fg(Color::Cyan), "agentx wants to run ".bold()],
-                    cmd,
-                    vec![],
-                );
-
-                contents.push(Line::from(""));
-=======
-            ApprovalRequest::Exec { reason, .. } => {
-                let mut contents: Vec<Line> = vec![];
->>>>>>> upstream/main
+            ApprovalRequest::Exec { command, reason, .. } => {
+                // Show proposed command then reason
+                let cmdline = strip_bash_lc_and_escape(command);
+                let mut contents: Vec<Line> = vec![
+                    Line::from("? ".fg(Color::Cyan)),
+                    Line::from(format!("agentx wants to run {}", cmdline).bold()),
+                    Line::from(""),
+                ];
                 if let Some(reason) = reason {
                     contents.push(Line::from(reason.clone().italic()));
                     contents.push(Line::from(""));

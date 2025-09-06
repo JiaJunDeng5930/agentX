@@ -661,7 +661,6 @@ pub(crate) fn new_session_info(
     }
 }
 
-<<<<<<< HEAD
 pub(crate) fn new_user_prompt(message: String, conv_short: Option<String>) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(""));
@@ -673,11 +672,8 @@ pub(crate) fn new_user_prompt(message: String, conv_short: Option<String>) -> Pl
     };
     lines.push(header);
     lines.extend(message.lines().map(|l| Line::from(l.to_string())));
-=======
-pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
-    UserHistoryCell { message }
+    PlainHistoryCell { lines }
 }
->>>>>>> upstream/main
 
 pub(crate) fn new_user_approval_decision(lines: Vec<Line<'static>>) -> PlainHistoryCell {
     PlainHistoryCell { lines }

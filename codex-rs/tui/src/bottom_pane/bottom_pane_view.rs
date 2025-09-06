@@ -36,8 +36,6 @@ pub(crate) trait BottomPaneView {
     ) -> Option<ApprovalRequest> {
         Some(request)
     }
-<<<<<<< HEAD
-
     /// Optional hook for views that expose a live status line. Views that do not
     /// support this can ignore the call.
     fn update_status_text(&mut self, _text: String) {}
@@ -45,6 +43,4 @@ pub(crate) trait BottomPaneView {
     /// Optional hook: update the short-form conversation id (e.g., 8-char uuid)
     /// shown in the status indicator while a task is running.
     fn update_conv_short_id(&mut self, _short_id: Option<String>) {}
-=======
->>>>>>> upstream/main
 }
