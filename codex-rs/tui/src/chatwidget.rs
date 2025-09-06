@@ -1037,13 +1037,18 @@ impl ChatWidget {
                 continue;
             }
             // `id: None` indicates a synthetic/fake id coming from replay.
-            self.dispatch_event_msg(None, msg, true);
+            self.dispatch_event_msg(None, msg, true, None);
         }
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
-        let Event { id, msg, .. } = event;
-        self.dispatch_event_msg(Some(id), msg, false);
+        let Event {
+            id,
+            msg,
+            conversation_id,
+            ..
+        } = event;
+        self.dispatch_event_msg(Some(id), msg, false, conversation_id);
     }
 
     /// Dispatch a protocol `EventMsg` to the appropriate handler.
@@ -1051,7 +1056,13 @@ impl ChatWidget {
     /// `id` is `Some` for live events and `None` for replayed events from
     /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
     /// that must not be used to correlate follow-up actions.
-    fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, from_replay: bool) {
+    fn dispatch_event_msg(
+        &mut self,
+        id: Option<String>,
+        msg: EventMsg,
+        from_replay: bool,
+        conversation_id: Option<Uuid>,
+    ) {
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
@@ -1076,8 +1087,24 @@ impl ChatWidget {
                 self.on_agent_reasoning_final()
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TaskStarted(_) => self.on_task_started(),
-            EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
+            EventMsg::TaskStarted(_) => {
+                self.on_task_started();
+                // update status + stream headers with active conversation short id
+                self.active_conv_id = conversation_id;
+                self.bottom_pane.set_active_conv_id(conversation_id);
+                let short = conversation_id.map(|u| {
+                    let s = u.as_simple().to_string();
+                    let n = s.len().min(8);
+                    s[..n].to_string()
+                });
+                self.stream.set_conv_short_id(short);
+            }
+            EventMsg::TaskComplete(TaskCompleteEvent { .. }) => {
+                self.on_task_complete();
+                self.active_conv_id = None;
+                self.bottom_pane.set_active_conv_id(None);
+                self.stream.set_conv_short_id(None);
+            }
             EventMsg::TokenCount(ev) => self.set_token_info(ev.info),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
