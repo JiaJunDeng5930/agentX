@@ -173,6 +173,11 @@ impl WidgetRef for StatusIndicatorWidget {
             " to interrupt)".dim(),
         ]);
 
+        // Append short conversation id (dim) if available
+        if let Some(short) = &self.conv_short {
+            spans.extend(vec![" ".into(), format!("conv {short}").dim()]);
+        }
+
         // Build lines: status, then queued messages, then spacer.
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(spans));
@@ -204,8 +209,8 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
-    use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
     use std::time::Duration;
     use std::time::Instant;
     use tokio::sync::mpsc::unbounded_channel;
