@@ -78,5 +78,9 @@ impl HeaderEmitter {
     pub(crate) fn set_conv_short(&mut self, short: Option<String>) {
         self.conv_short = short;
     }
+
+    pub(crate) fn conv_short(&self) -> Option<String> {
+        self.conv_short.clone()
+    }
 }
 // Header rendering is handled in the controller; no local helper here.

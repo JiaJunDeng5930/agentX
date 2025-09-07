@@ -123,29 +123,36 @@ impl HistoryCell for UserHistoryCell {
 pub(crate) struct AgentMessageCell {
     lines: Vec<Line<'static>>,
     is_first_line: bool,
+    conv_short: Option<String>,
 }
 
 impl AgentMessageCell {
-    pub(crate) fn new(lines: Vec<Line<'static>>, is_first_line: bool) -> Self {
+    pub(crate) fn new(
+        lines: Vec<Line<'static>>,
+        is_first_line: bool,
+        conv_short: Option<String>,
+    ) -> Self {
         Self {
             lines,
             is_first_line,
+            conv_short,
         }
     }
 }
 
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        word_wrap_lines(
-            &self.lines,
-            RtOptions::new(width as usize)
-                .initial_indent(if self.is_first_line {
-                    "> ".into()
-                } else {
-                    "  ".into()
-                })
-                .subsequent_indent("  ".into()),
-        )
+        let initial_indent: Line<'static> = if self.is_first_line {
+            if let Some(short) = &self.conv_short {
+                Line::from(vec![format!("[conv {short}]").dim(), " ".into(), "> ".into()])
+            } else {
+                Line::from("> ")
+            }
+        } else {
+            Line::from("  ")
+        };
+
+        word_wrap_lines(&self.lines, RtOptions::new(width as usize).initial_indent(initial_indent).subsequent_indent("  ".into()))
     }
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
@@ -661,15 +668,11 @@ pub(crate) fn new_session_info(
     }
 }
 
-pub(crate) fn new_user_prompt(message: String, conv_short: Option<String>) -> PlainHistoryCell {
+pub(crate) fn new_user_prompt(message: String, _conv_short: Option<String>) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(""));
-    let header = match conv_short {
-        Some(s) if !s.is_empty() => {
-            Line::from(vec![format!("[conv {s}] ").dim(), "user".cyan().bold()])
-        }
-        _ => Line::from("user".cyan().bold()),
-    };
+    // Always render plain user header; do not display conv id here.
+    let header = Line::from("user".cyan().bold());
     lines.push(header);
     lines.extend(message.lines().map(|l| Line::from(l.to_string())));
     PlainHistoryCell { lines }
@@ -1242,7 +1245,7 @@ pub(crate) fn new_reasoning_summary_block(
                         Box::new(TranscriptOnlyHistoryCell {
                             lines: header_lines,
                         }),
-                        Box::new(AgentMessageCell::new(summary_lines, true)),
+                        Box::new(AgentMessageCell::new(summary_lines, true, None)),
                     ];
                 }
             }

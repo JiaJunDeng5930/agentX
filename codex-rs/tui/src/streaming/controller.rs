@@ -128,9 +128,11 @@ impl StreamController {
             }
             if !out_lines.is_empty() {
                 // Insert as a HistoryCell so display drops the header while transcript keeps it.
+                let conv_short = self.header.conv_short();
                 sink.insert_history_cell(Box::new(history_cell::AgentMessageCell::new(
                     out_lines,
                     self.header.maybe_emit_header(),
+                    conv_short,
                 )));
             }
 
@@ -163,9 +165,11 @@ impl StreamController {
         }
         let step = { self.state.step() };
         if !step.history.is_empty() {
+            let conv_short = self.header.conv_short();
             sink.insert_history_cell(Box::new(history_cell::AgentMessageCell::new(
                 step.history,
                 self.header.maybe_emit_header(),
+                conv_short,
             )));
         }
 
