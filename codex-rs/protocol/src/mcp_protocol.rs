@@ -119,6 +119,10 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
     },
+    GetUserAgent {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+    },
     /// Execute a command (argv vector) under the server's sandbox.
     ExecOneOffCommand {
         #[serde(rename = "id")]
@@ -329,6 +333,12 @@ pub struct GetAuthStatusResponse {
     pub preferred_auth_method: AuthMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetUserAgentResponse {
+    pub user_agent: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
