@@ -884,20 +884,22 @@ impl Config {
     }
 
     fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {
-        let mut p = match codex_dir {
+        let p = match codex_dir {
             Some(p) => p.to_path_buf(),
             None => return None,
         };
 
-        p.push("AGENTS.md");
-        std::fs::read_to_string(&p).ok().and_then(|s| {
-            let s = s.trim();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        })
+        // Prefer AGENTS.org; fall back to AGENTS.md if missing or empty.
+        let try_read = |name: &str| -> Option<String> {
+            let mut path = p.clone();
+            path.push(name);
+            std::fs::read_to_string(&path).ok().and_then(|s| {
+                let s = s.trim();
+                if s.is_empty() { None } else { Some(s.to_string()) }
+            })
+        };
+
+        try_read("AGENTS.org").or_else(|| try_read("AGENTS.md"))
     }
 
     fn get_base_instructions(

@@ -1,6 +1,8 @@
 //! Project-level documentation discovery.
 //!
-//! Project-level documentation can be stored in files named `AGENTS.md`.
+//! Project-level documentation can be stored in files named `AGENTS.md` or
+//! `AGENTS.org`. When both exist in the same directory, `AGENTS.org` takes
+//! precedence.
 //! We include the concatenation of all files found along the path from the
 //! repository root to the current working directory as follows:
 //!
@@ -17,8 +19,9 @@ use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use tracing::error;
 
-/// Currently, we only match the filename `AGENTS.md` exactly.
-const CANDIDATE_FILENAMES: &[&str] = &["AGENTS.md"];
+/// Candidate filenames searched in each directory, in priority order.
+/// If multiple exist in the same directory, the first matched wins.
+const CANDIDATE_FILENAMES: &[&str] = &["AGENTS.org", "AGENTS.md"];
 
 /// When both `Config::instructions` and the project doc are present, they will
 /// be concatenated with the following separator.
@@ -231,6 +234,19 @@ mod tests {
         );
     }
 
+    /// `.org` file is supported and returned when present.
+    #[tokio::test]
+    async fn org_doc_smaller_than_limit_is_returned() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.org"), "hello org").unwrap();
+
+        let res = get_user_instructions(&make_config(&tmp, 4096, None))
+            .await
+            .expect("doc expected");
+
+        assert_eq!(res, "hello org");
+    }
+
     /// Oversize file is truncated to `project_doc_max_bytes`.
     #[tokio::test]
     async fn doc_larger_than_limit_is_truncated() {
@@ -346,5 +362,46 @@ mod tests {
 
         let res = get_user_instructions(&cfg).await.expect("doc expected");
         assert_eq!(res, "root doc\n\ncrate doc");
+    }
+
+    /// When both AGENTS.org and AGENTS.md exist in the same directory,
+    /// AGENTS.org takes precedence.
+    #[tokio::test]
+    async fn prefers_org_over_md_in_same_directory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("AGENTS.md"), "md doc").unwrap();
+        fs::write(tmp.path().join("AGENTS.org"), "org doc").unwrap();
+
+        let res = get_user_instructions(&make_config(&tmp, 4096, None))
+            .await
+            .expect("doc expected");
+
+        assert_eq!(res, "org doc");
+    }
+
+    /// Concatenation honors root-to-cwd order and file preference per directory.
+    #[tokio::test]
+    async fn concatenates_org_at_root_and_md_in_nested() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        // Simulate a git repository.
+        std::fs::write(
+            repo.path().join(".git"),
+            "gitdir: /path/to/actual/git/dir\n",
+        )
+        .unwrap();
+
+        // Repo root uses .org
+        fs::write(repo.path().join("AGENTS.org"), "root org").unwrap();
+
+        // Nested working directory with only .md
+        let nested = repo.path().join("workspace/crate_b");
+        std::fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("AGENTS.md"), "child md").unwrap();
+
+        let mut cfg = make_config(&repo, 4096, None);
+        cfg.cwd = nested;
+
+        let res = get_user_instructions(&cfg).await.expect("doc expected");
+        assert_eq!(res, "root org\n\nchild md");
     }
 }

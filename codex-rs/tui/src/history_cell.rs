@@ -876,9 +876,13 @@ pub(crate) fn new_status_output(
             Ok(paths) => {
                 let mut rels: Vec<String> = Vec::new();
                 for p in paths {
+                    let file_name = p
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("AGENTS.md");
                     let display = if let Some(parent) = p.parent() {
                         if parent == config.cwd {
-                            "AGENTS.md".to_string()
+                            file_name.to_string()
                         } else {
                             let mut cur = config.cwd.as_path();
                             let mut ups = 0usize;
@@ -893,7 +897,7 @@ pub(crate) fn new_status_output(
                             }
                             if reached {
                                 let up = format!("..{}", std::path::MAIN_SEPARATOR);
-                                format!("{}AGENTS.md", up.repeat(ups))
+                                format!("{}{}", up.repeat(ups), file_name)
                             } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
                                 stripped.display().to_string()
                             } else {
