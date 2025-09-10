@@ -79,7 +79,6 @@ enum RolloutCmd {
 }
 
 impl RolloutRecorder {
-    #[allow(dead_code)]
     /// List conversations (rollout files) under the provided Codex home directory.
     pub async fn list_conversations(
         codex_home: &Path,
