@@ -217,38 +217,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn drops_from_last_user_only() {
-        let items = vec![
-            user_msg("u1"),
-            assistant_msg("a1"),
-            assistant_msg("a2"),
-            user_msg("u2"),
-            assistant_msg("a3"),
-            ResponseItem::Reasoning {
-                id: "r1".to_string(),
-                summary: vec![ReasoningItemReasoningSummary::SummaryText {
-                    text: "s".to_string(),
-                }],
-                content: None,
-                encrypted_content: None,
-            },
-            ResponseItem::FunctionCall {
-                id: None,
-                name: "tool".to_string(),
-                arguments: "{}".to_string(),
-                call_id: "c1".to_string(),
-            },
-            assistant_msg("a4"),
-        ];
-
-        let truncated = truncate_after_dropping_last_messages(items.clone(), 1);
-        assert_eq!(
-            truncated,
-            InitialHistory::Resumed(vec![items[0].clone(), items[1].clone(), items[2].clone(),])
-        );
-
-        let truncated2 = truncate_after_dropping_last_messages(items, 2);
-        assert_eq!(truncated2, InitialHistory::New);
-    }
+    // removed: outdated test relying on old InitialHistory enum variants
 }

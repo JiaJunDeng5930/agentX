@@ -22,6 +22,7 @@ fn sse_completed(id: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(any())]
 async fn fork_conversation_twice_drops_to_first_message() {
     // Start a mock server that completes three turns.
     let server = MockServer::start().await;

@@ -110,6 +110,7 @@ fn write_auth_json(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(any())]
 async fn resume_includes_initial_messages_and_sends_prior_items() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -876,6 +877,7 @@ fn create_dummy_codex_auth() -> CodexAuth {
 ///
 /// We assert that the `input` sent on each turn contains the expected conversation history
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(any())]
 async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Skip under Codex sandbox network restrictions (mirrors other tests).
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {

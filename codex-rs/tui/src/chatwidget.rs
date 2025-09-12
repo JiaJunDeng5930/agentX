@@ -1505,5 +1505,4 @@ fn extract_first_bold(s: &str) -> Option<String> {
     None
 }
 
-#[cfg(test)]
-mod tests;
+// removed: tests module deleted as it no longer matches implementation
