@@ -91,4 +91,4 @@ Create a PR to update [`Formula/c/codex.rb`](https://github.com/Homebrew/homebre
 
 ### Security & responsible AI
 
-Have you discovered a vulnerability or have concerns about model output? Please e-mail **security@openai.com** and we will respond promptly. 
+Have you discovered a vulnerability or have concerns about model output? Please e-mail **security@openai.com** and we will respond promptly.

@@ -79,7 +79,7 @@ For instructions on [context_before] and [context_after]:
 - If a code block is repeated so many times in a class or function such that even a single `@@` statement and 3 lines of context cannot uniquely identify the snippet of code, you can use multiple `@@` statements to jump to the right context. For instance:
 
 @@ class BaseClass
-@@ 	 def method():
+@@       def method():
 [3 lines of pre-context]
 - [old_code]
 + [new_code]

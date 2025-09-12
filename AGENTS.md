@@ -37,4 +37,4 @@ This repo hosts the Codex CLI (Rust) workspace used to run the agent, TUI, and c
 - Shell/tooling runs can be sandboxed/approved at runtime; keep defaults safe and document when escalating permissions is required.
 
 ## Architecture Notes
-- Core event loop streams model responses; tool calls must be paired with tool outputs in the same turn. Preserve this invariant when refactoring (see conv_* tools and auto-compact logic). 
+- Core event loop streams model responses; tool calls must be paired with tool outputs in the same turn. Preserve this invariant when refactoring (see conv_* tools and auto-compact logic).

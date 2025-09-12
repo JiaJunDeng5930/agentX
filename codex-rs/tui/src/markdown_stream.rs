@@ -596,11 +596,11 @@ mod tests {
         let cfg = test_config();
 
         // Emoji (wide), CJK, control char, digit + combining macron sequences
-        let input = "🙂🙂🙂\n汉字漢字\nA\u{0003}0\u{0304}\n";
+        let input = "🙂🙂🙂\n 汉字漢字\nA\u{0003}0\u{0304}\n";
         let deltas = vec![
             "🙂",
             "🙂",
-            "🙂\n汉",
+            "🙂\n 汉",
             "字漢",
             "字\nA",
             "\u{0003}",

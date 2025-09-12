@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn rows_do_not_exceed_width_emoji_cjk() {
-        // 😀 is width 2; 你/好 are width 2.
+        // 😀 is width 2; 你 / 好 are width 2.
         let mut rb = RowBuilder::new(6);
         rb.push_fragment("😀😀 你好");
         let rows = rb.rows().to_vec();

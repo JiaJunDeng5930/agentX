@@ -80,4 +80,4 @@ Please read `AGENTS.md` for contributor guidelines:
 
 ## License
 See `LICENSE` for licensing terms. By contributing, you agree to the project’s license
-and contribution policies. 
+and contribution policies.

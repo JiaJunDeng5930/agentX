@@ -16,7 +16,7 @@
 ## 概念与术语
 
 - 会话（conversation）：核心 `Session` 内的独立对话上下文，历史记录、工具调用等都按会话隔离管理。
-- turn：与模型的一次请求-响应（streaming）过程。一个任务（task）可能跨多个 turn。
+- turn：与模型的一次请求 - 响应（streaming）过程。一个任务（task）可能跨多个 turn。
 - 真实 compact：使用 `prompt_for_compact_command.md` 的“总结指令”发起一轮模型请求，生成总结消息，并将历史裁剪为“只保留一条总结消息”。
 - 内联 compact：compact 作为当前任务的内部步骤执行，不创建新 task，也不需要“continue”。
 
@@ -60,7 +60,7 @@ threshold_percent = 15
 
 1) 构造“总结指令”的 Prompt：
 - 使用现有 `prompt_for_compact_command.md` 作为 `base_instructions_override`。
-- 输入为“当前会话历史 + 一个空/占位输入项”即可，不需要注入 `Start Summarization` 文本（避免把 compact 视作普通用户消息）。
+- 输入为“当前会话历史 + 一个空 / 占位输入项”即可，不需要注入 `Start Summarization` 文本（避免把 compact 视作普通用户消息）。
 
 2) 调用模型执行一轮总结：
 - 通过与 `run_turn()` 相同的 streaming 管道执行（可沿用 `drain_to_completed()` 逻辑），产生一条 assistant 总结消息。
@@ -79,13 +79,13 @@ threshold_percent = 15
 ## context left 计算
 
 - post-turn（精准）：
-  - 使用上报的 `TokenUsage`（`tokens_in_context_window()` 考虑了 reasoning token 的回收），结合 `model_context_window` 得到已用/剩余比例。
+  - 使用上报的 `TokenUsage`（`tokens_in_context_window()` 考虑了 reasoning token 的回收），结合 `model_context_window` 得到已用 / 剩余比例。
   - 基线（baseline_used_tokens）：用于扣除固定前置内容（系统指令、工具说明等）影响，优先取首轮的 `cached_input_tokens`；否则取 0。
   - 采用既有 `percent_of_context_window_remaining(context_window, baseline)` 计算，确保 UI 与 core 一致。
 
 - pre-turn（估算）：
   - 在发起请求前，需要基于“当前历史 + 指令文案”估算 token 占用。
-  - 简化策略：字符数/4 近似 token；或引入对应模型 tokenizer 做更精确估算（允许破坏性引入依赖）。
+  - 简化策略：字符数 /4 近似 token；或引入对应模型 tokenizer 做更精确估算（允许破坏性引入依赖）。
   - 同样扣除 baseline 后计算剩余百分比，与 post-turn 一致。
 
 ## 中断式触发（可选）
@@ -115,19 +115,19 @@ interrupt_mid_turn = true
 
 ## 失败与重试
 
-- 内联 compact turn 采用与正常 turn 一致的重试/退避策略（按 provider 配置的 stream/request retry 策略）。
+- 内联 compact turn 采用与正常 turn 一致的重试 / 退避策略（按 provider 配置的 stream/request retry 策略）。
 - 重试用尽后，会上报 `ErrorEvent`；但不终止主任务循环，用户可继续对话或手动重试。
 
 ## 并发与工具调用
 
-- 若在工具/函数调用链过程中触发 post-turn 检测：先执行内联 compact，再继续后续 turn，避免下轮被上下文挤爆。
+- 若在工具 / 函数调用链过程中触发 post-turn 检测：先执行内联 compact，再继续后续 turn，避免下轮被上下文挤爆。
 - 预检在“发送前”执行，能保证“下一次请求”至少在阈值之上。
 
 ## 兼容性与迁移
 
 - 默认关闭（`enabled=false`），不改变现有用户体验。
 - 开启后，自动 compact 的流式总结内容会写入历史，且随后立即裁剪到 1 条消息（总结）。
-- 对于依赖旧式“compact 后需要 continue”的脚本/工具，此设计改变了默认行为（破坏性），但从交互体验角度更符合“自动化”诉求。
+- 对于依赖旧式“compact 后需要 continue”的脚本 / 工具，此设计改变了默认行为（破坏性），但从交互体验角度更符合“自动化”诉求。
 
 ## 代码改动点（指引）
 
@@ -171,16 +171,15 @@ interrupt_mid_turn = true
 
 ## FAQ
 
-- Q：为什么不把手动 `/compact` 也改成“内联”？  
+- Q：为什么不把手动 `/compact` 也改成“内联”？
   A：手动命令保留原行为，避免破坏用户已有工作流；自动 compact 走“更自动”的新路径即可。
 
-- Q：是否支持跨会话共享阈值/统计？  
+- Q：是否支持跨会话共享阈值 / 统计？
   A：否。语义与操作都在“单个会话”内进行。
 
-- Q：mid-turn 真的能精确判断“耗尽”吗？  
+- Q：mid-turn 真的能精确判断“耗尽”吗？
   A：streaming 过程中只能估算；因此默认不抢占中断，只有在开启 `interrupt_mid_turn` 时采用启发式中断。
 
 ---
 
 实施本设计后，默认保持关闭；开启后对所有前端统一生效，达到“只要低于阈值就触发自动 compact”的效果，同时保留手动 `/compact` 的原有能力。
-

@@ -6,7 +6,7 @@
 
 - 目标
   - 在 TUI 界面实时显示“当前运行中的 Task 所属 Conversation 的 ID”。
-  - 当没有 Task 运行时不显示/置灰该信息（可配置）。
+  - 当没有 Task 运行时不显示 / 置灰该信息（可配置）。
   - 默认以短格式（8 位或 12 位）呈现，保持状态行紧凑。
 - 非目标
   - 不实现会话（Conversation）切换 UI；仍然沿用当前“/new 创建新会话”的交互。
@@ -27,7 +27,7 @@
   - 若出现 `Exec*`/`Patch*` 事件提前到达（极少数次序问题），也可以按需覆盖为 `event.conversation_id`，但以 `TaskStarted/TaskComplete` 为主。
 - 在底部状态行（Status Indicator）新增一个轻量只读区域显示 `conv_id`：
   - 格式：`conv <short-id>`。
-  - 样式：`dim()`（与现有状态/提示风格一致，低打扰）。
+  - 样式：`dim()`（与现有状态 / 提示风格一致，低打扰）。
   - 宽度不足时可进一步截断（例如 8 位）并在超窄终端下自动隐藏（不换行，不影响主要信息）。
 
 ## UI 展示位置与格式
@@ -60,7 +60,7 @@
      - `TaskComplete`/`TurnAborted`：`self.active_conv_id = None;` 并同步更新底部状态。
      - 可选：对 `ExecCommandBegin/PatchApplyBegin` 若 `active_conv_id.is_none()` 时补充设置（容错）。
 
-2. `tui/src/bottom_pane/mod.rs` 与/或 `status_indicator_view.rs`
+2. `tui/src/bottom_pane/mod.rs` 与 / 或 `status_indicator_view.rs`
    - 在 `BottomPane` 增加只读状态：`active_conv_id_short: Option<String>`，提供 `set_active_conv_id(Option<Uuid>)`，内部按配置做格式化并请求重绘。
    - 在 `status_indicator_view.rs` 渲染时，如果配置启用且有值，按顺序加入一段 `"conv "+short_id` 的 `Line`，使用 `.dim()`。
 
@@ -75,7 +75,7 @@
 ## 行为细节
 
 - 有 Task：显示当前 Task 所在 `conv_id`（来自最近的 `TaskStarted`）。
-- 无 Task：按 `conv_id_idle_mode` 显示/隐藏；默认隐藏。
+- 无 Task：按 `conv_id_idle_mode` 显示 / 隐藏；默认隐藏。
 - 新建会话（`/new`）：
   - 旧 `ChatWidget` 被替换，新 Widget 初始 `active_conv_id=None`，直到收到新的 `TaskStarted`。
 
@@ -86,9 +86,9 @@
 
 ## 测试方案
 
-- 单元/快照测试（`codex-rs/tui` 使用 `insta`）：
+- 单元 / 快照测试（`codex-rs/tui` 使用 `insta`）：
   - 为 `TaskStarted`→消息流→`TaskComplete` 的典型路径更新快照，断言出现 `conv <short-id>` 文本（或在无 Task 时不出现）。
-  - 宽度边界下的渲染（可以通过现有测试辅助）验证截断/隐藏逻辑。
+  - 宽度边界下的渲染（可以通过现有测试辅助）验证截断 / 隐藏逻辑。
 - 手动验证：
   - 启动 `codex tui`，发起一次交互，观察底部状态行出现 `conv <id>`；任务结束后按配置隐藏或置灰。
 

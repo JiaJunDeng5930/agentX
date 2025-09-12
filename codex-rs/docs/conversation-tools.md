@@ -70,7 +70,7 @@
 - 行为：读取 `session` 内全部 `conversation`
 - 返回：
   - JSON 负载：{ "conversations": [ { "id": string, "message_count": number, "last_active_at": "<RFC3339 string>" } ] }
-  - 统计口径：`message_count` 仅统计 `conversation` 历史中 `ResponseItem::Message` 的条数（包含 user 与 assistant），不计入 tool 调用/输出、reasoning 等其他类型。实现与 `ConversationHistory` 的筛选逻辑保持一致。
+  - 统计口径：`message_count` 仅统计 `conversation` 历史中 `ResponseItem::Message` 的条数（包含 user 与 assistant），不计入 tool 调用 / 输出、reasoning 等其他类型。实现与 `ConversationHistory` 的筛选逻辑保持一致。
 
 4) `conv_history`（非打断型）
 
@@ -116,26 +116,26 @@
 ---
 
 ## 数据与结构（核心）
- 
+
 ### 1) `ConversationContext` 扩展
- 
+
 - 继续承载：
   - `base_instructions: Option<String>`
   - `user_instructions: Option<String>`
   - `mcp_view: McpView`（开放 `with_allowlist`）
   - `tools_prefs: ToolsPrefs`（可按需扩展）
- 
+
 ### 1.5) `Session` 增强
 - 为精确实现“打断 → 目标 `conversation` → 承接”的顺序，`Session` 新增最小任务计划队列：
   - `pending_tasks: VecDeque<TaskPlan>`
   - 该队列由 `submission_loop` 消费；当 `current_task` 完成或被替换后，按 FIFO 启动下一项计划（详见下节“task 调度器（串行执行）”）
- 
+
 ### 2) `conversation` 寻址
- 
+
 - 仅通过 `conversation_id: Uuid` 寻址；不引入 `index` 模式
- 
+
 ### 3) `task` 调度器（串行执行）
- 
+
 - 增加 `pending_tasks: VecDeque<TaskPlan>`，确保“一个完成→启动下一个”
 - 消费点：在 `submission_loop` 中消费 `pending_tasks`，当 `current_task` 完成时按 FIFO 启动下一个
 - 提供：
@@ -153,7 +153,7 @@
 - `open_conversation_with(spec)`：从当前 `conversation` 继承并覆盖上下文；记录 `user_instruction` 为首条 message
 - `plan_for_conv_create(spec, call_ctx)` → `[T_new, T_cont]`
 - `plan_for_conv_send(ref, input, call_ctx)` → `[T_target, T_cont]`
- 
+
 ### 5) `conversation` 元数据
 - 新增并维护 `last_active_at: Instant`：
   - 在写入历史（record_items）与 `TaskComplete` 时刷新
@@ -174,7 +174,7 @@
   - `conv_create`：
     - 解析 `base_instruction_text` / `base_instruction_file`
       - 路径解释：`base_instruction_file` 为相对 `turn_context.cwd` 的相对路径或绝对路径
-      - 失败语义：文件不存在/读取失败时，直接返回 `FunctionCallOutput`，其中 `output.success = Some(false)`，`output.content` 为简要摘要（例如 `"failed to read base_instruction_file"`）；不进行任务替换与排队（不启动 T_new/T_cont），避免把失败详情注入模型上下文
+      - 失败语义：文件不存在 / 读取失败时，直接返回 `FunctionCallOutput`，其中 `output.success = Some(false)`，`output.content` 为简要摘要（例如 `"failed to read base_instruction_file"`）；不进行任务替换与排队（不启动 T_new/T_cont），避免把失败详情注入模型上下文
     - `open_conversation_with(spec)` → `conversation_id`
     - `abort_current_and_enqueue([T_new(user_instruction), T_cont(return=last_assistant_message_of_T_new)])`
     - 返回 JSON（包含 `conversation_id`/`last_assistant_message`），`FunctionCallOutput` 在 T_cont 注入
@@ -187,7 +187,7 @@
 ---
 
 ## 事件策略
- 
+
 - 打断型工具事件顺序保证：
   - 原 `conversation`：`TurnAborted(Replaced)`
   - 目标 `conversation`（T_new/T_target）：`TaskStarted` → `AgentMessageDelta`（可选）→ `TokenCount`（可选）→ `TaskComplete`
@@ -223,9 +223,9 @@
   - `conv_history`：`entries`
   - `conv_destroy`：`{ ok }`、`reason?`
   - 失败时设置 `success: Some(false)` 并提供简要摘要（如 `"failed to read base_instruction_file"`）
- 
+
 ---
- 
+
 注：`conv_create` 不再接受 `internal_tools` 参数，新建会话的工具集保持默认设置。
 
 ---
