@@ -895,7 +895,11 @@ impl Config {
             path.push(name);
             std::fs::read_to_string(&path).ok().and_then(|s| {
                 let s = s.trim();
-                if s.is_empty() { None } else { Some(s.to_string()) }
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s.to_string())
+                }
             })
         };
 

@@ -145,7 +145,11 @@ impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let initial_indent: Line<'static> = if self.is_first_line {
             if let Some(short) = &self.conv_short {
-                Line::from(vec![format!("[conv {short}]").dim(), " ".into(), "> ".into()])
+                Line::from(vec![
+                    format!("[conv {short}]").dim(),
+                    " ".into(),
+                    "> ".into(),
+                ])
             } else {
                 Line::from("> ")
             }
@@ -153,7 +157,12 @@ impl HistoryCell for AgentMessageCell {
             Line::from("  ")
         };
 
-        word_wrap_lines(&self.lines, RtOptions::new(width as usize).initial_indent(initial_indent).subsequent_indent("  ".into()))
+        word_wrap_lines(
+            &self.lines,
+            RtOptions::new(width as usize)
+                .initial_indent(initial_indent)
+                .subsequent_indent("  ".into()),
+        )
     }
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {

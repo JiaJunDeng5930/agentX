@@ -216,8 +216,8 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
     use std::time::Duration;
     use std::time::Instant;
     use tokio::sync::mpsc::unbounded_channel;

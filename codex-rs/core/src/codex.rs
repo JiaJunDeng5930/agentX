@@ -12,6 +12,8 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::auth::AuthManager;
+use crate::openai_tools::ToolsConfigParams;
 use anyhow;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -19,8 +21,6 @@ use chrono;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
-use crate::auth::AuthManager;
-use crate::openai_tools::ToolsConfigParams;
 use codex_protocol::protocol::ConversationHistoryResponseEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
@@ -101,10 +101,10 @@ use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
-use crate::protocol::TaskStartedEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
+use crate::protocol::TaskStartedEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
@@ -122,12 +122,12 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
-use codex_protocol::models::WebSearchAction;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
+use codex_protocol::models::WebSearchAction;
 
 // A convenience extension trait for acquiring mutex locks where poisoning is
 // unrecoverable and should abort the program. This avoids scattered `.unwrap()`
@@ -494,7 +494,10 @@ impl Session {
             match resume_path.as_ref() {
                 Some(path) => {
                     let session_id = Uuid::new_v4();
-                    let items = RolloutRecorder::get_rollout_history(path).await.ok().flatten();
+                    let items = RolloutRecorder::get_rollout_history(path)
+                        .await
+                        .ok()
+                        .flatten();
                     RolloutRecorder::new(&config, session_id, user_instructions.clone())
                         .await
                         .map(|rec| (session_id, items, rec))
@@ -694,10 +697,8 @@ impl Session {
         let mut conversation_items = Vec::<ResponseItem>::with_capacity(2);
         if let Some(user_instructions) = root_conversation.ctx.user_instructions.as_deref() {
             conversation_items.push(
-                crate::user_instructions::UserInstructions::new(
-                    user_instructions.to_string(),
-                )
-                .into(),
+                crate::user_instructions::UserInstructions::new(user_instructions.to_string())
+                    .into(),
             );
         }
         conversation_items.push(ResponseItem::from(EnvironmentContext::new(
@@ -2488,14 +2489,14 @@ async fn run_turn(
                     // Surface retry information to any UI/front‑end so the
                     // user understands what is happening instead of staring
                     // at a seemingly frozen screen.
-                    sess.notify_background_event_for(
-                        &sub_id,
-                        conv.id,
-                        format!(
-                            "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
-                        ),
-                    )
-                    .await;
+                    sess
+                        .notify_stream_error(
+                            &sub_id,
+                            format!(
+                                "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
+                            ),
+                        )
+                        .await;
 
                     tokio::time::sleep(delay).await;
                 } else {
@@ -2777,14 +2778,14 @@ async fn run_compact_task(
                 if retries < max_retries {
                     retries += 1;
                     let delay = backoff(retries);
-                    sess.notify_background_event_for(
-                        &sub_id,
-                        sess.root_conversation_id(),
-                        format!(
-                            "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
-                        ),
-                    )
-                    .await;
+                    sess
+                        .notify_stream_error(
+                            &sub_id,
+                            format!(
+                                "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
+                            ),
+                        )
+                        .await;
                     tokio::time::sleep(delay).await;
                     continue;
                 } else {
@@ -3278,7 +3279,8 @@ async fn handle_function_call(
                             output: FunctionCallOutputPayload {
                                 content: format!(
                                     "failed to read user_instruction_file '{}': {}",
-                                    abs.display(), e
+                                    abs.display(),
+                                    e
                                 ),
                                 success: Some(false),
                             },
@@ -3288,12 +3290,8 @@ async fn handle_function_call(
             }
             effective_ui.push_str(&args.user_instruction);
 
-            let target_id = sess.open_conversation_with(
-                None,
-                Some(effective_ui.clone()),
-                allow,
-                tools,
-            );
+            let target_id =
+                sess.open_conversation_with(None, Some(effective_ui.clone()), allow, tools);
 
             // 构造任务计划：先在新对话跑一轮，再在原对话注入闭合
             let mut input_items: Vec<InputItem> = Vec::new();
@@ -3535,7 +3533,8 @@ async fn handle_function_call(
                     };
                 }
             };
-            let result = sess.session_manager
+            let result = sess
+                .session_manager
                 .handle_exec_command_request(exec_params)
                 .await;
             let function_call_output = crate::exec_command::result_into_payload(result);
@@ -3557,7 +3556,8 @@ async fn handle_function_call(
                     };
                 }
             };
-            let result = sess.session_manager
+            let result = sess
+                .session_manager
                 .handle_write_stdin_request(write_stdin_params)
                 .await;
             let function_call_output: FunctionCallOutputPayload =

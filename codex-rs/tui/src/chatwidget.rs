@@ -1171,10 +1171,7 @@ impl ChatWidget {
             Some(InputMessageKind::Plain) | None => {
                 let message = event.message.trim();
                 if !message.is_empty() {
-                    self.add_to_history(history_cell::new_user_prompt(
-                        message.to_string(),
-                        None,
-                    ));
+                    self.add_to_history(history_cell::new_user_prompt(message.to_string(), None));
                 }
             }
         }

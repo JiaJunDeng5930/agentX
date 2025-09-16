@@ -17,6 +17,7 @@ use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::BorderType;
@@ -25,7 +26,6 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
-use ratatui::style::Stylize;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -115,7 +115,9 @@ pub(crate) struct UserApprovalWidget {
 impl UserApprovalWidget {
     pub(crate) fn new(approval_request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         let confirmation_prompt = match &approval_request {
-            ApprovalRequest::Exec { command, reason, .. } => {
+            ApprovalRequest::Exec {
+                command, reason, ..
+            } => {
                 // Show proposed command then reason
                 let cmdline = strip_bash_lc_and_escape(command);
                 let mut contents: Vec<Line> = vec![

@@ -9,7 +9,11 @@ pub struct Cli {
     /// Optional user prompt to start the session.
     pub prompt: Option<String>,
     /// User instructions file to seed the session (mutually exclusive with positional prompt).
-    #[arg(long = "instructions-file", value_name = "FILE", conflicts_with = "prompt")]
+    #[arg(
+        long = "instructions-file",
+        value_name = "FILE",
+        conflicts_with = "prompt"
+    )]
     pub instructions_file: Option<PathBuf>,
 
     /// Optional image(s) to attach to the initial prompt.

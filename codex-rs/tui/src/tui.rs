@@ -149,7 +149,12 @@ fn set_panic_hook() {
 pub enum TuiEvent {
     Key(KeyEvent),
     Paste(String),
-    AttachImage { path: PathBuf, width: u32, height: u32, format_label: String },
+    AttachImage {
+        path: PathBuf,
+        width: u32,
+        height: u32,
+        format_label: String,
+    },
     Draw,
 }
 

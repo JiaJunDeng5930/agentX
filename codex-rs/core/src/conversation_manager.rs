@@ -188,7 +188,11 @@ fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> 
             }
         }
     }
-    if cut_index == 0 { None } else { Some(items.into_iter().take(cut_index).collect()) }
+    if cut_index == 0 {
+        None
+    } else {
+        Some(items.into_iter().take(cut_index).collect())
+    }
 }
 
 #[cfg(test)]

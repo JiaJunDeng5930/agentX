@@ -198,7 +198,11 @@ impl RolloutRecorder {
         }
 
         info!("Resumed rollout successfully from {path:?}");
-        if items.is_empty() { Ok(None) } else { Ok(Some(items)) }
+        if items.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(items))
+        }
     }
 
     pub async fn shutdown(&self) -> std::io::Result<()> {
