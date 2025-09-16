@@ -22,6 +22,27 @@ pub fn builtin_model_presets() -> &'static [ModelPreset] {
     // Order reflects effort from minimal to high.
     const PRESETS: &[ModelPreset] = &[
         ModelPreset {
+            id: "gpt-5-codex-low",
+            label: "gpt-5-codex low",
+            description: "",
+            model: "gpt-5-codex",
+            effort: ReasoningEffort::Low,
+        },
+        ModelPreset {
+            id: "gpt-5-codex-medium",
+            label: "gpt-5-codex medium",
+            description: "",
+            model: "gpt-5-codex",
+            effort: ReasoningEffort::Medium,
+        },
+        ModelPreset {
+            id: "gpt-5-codex-high",
+            label: "gpt-5-codex high",
+            description: "",
+            model: "gpt-5-codex",
+            effort: ReasoningEffort::High,
+        },
+        ModelPreset {
             id: "gpt-5-minimal",
             label: "gpt-5 minimal",
             description: "— fastest responses with limited reasoning; ideal for coding, instructions, or lightweight tasks",
