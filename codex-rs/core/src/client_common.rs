@@ -57,7 +57,8 @@ impl Prompt {
             _ => false,
         });
         if self.base_instructions_override.is_none()
-            && (model.needs_special_apply_patch_instructions || !is_apply_patch_tool_present)
+            && model.needs_special_apply_patch_instructions
+            && !is_apply_patch_tool_present
         {
             sections.push(APPLY_PATCH_TOOL_INSTRUCTIONS);
         }
