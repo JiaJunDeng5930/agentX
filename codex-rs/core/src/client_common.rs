@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 /// The `instructions` field in the payload sent to a model should always start
 /// with this content.
 const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
+const GPT_5_CODEX_INSTRUCTIONS: &str = include_str!("../gpt_5_codex_prompt.md");
 
 /// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
@@ -38,7 +39,13 @@ impl Prompt {
         let base = self
             .base_instructions_override
             .as_deref()
-            .unwrap_or(BASE_INSTRUCTIONS);
+            .unwrap_or_else(|| {
+                if model.slug.starts_with("gpt-5-codex") {
+                    GPT_5_CODEX_INSTRUCTIONS
+                } else {
+                    BASE_INSTRUCTIONS
+                }
+            });
         let mut sections: Vec<&str> = vec![base];
 
         // When there are no custom instructions, add apply_patch_tool_instructions if either:
